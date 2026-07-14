@@ -1,0 +1,50 @@
+CONFIG_IDF_TARGET="esp32p4"
+
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_OFFSET=0x10000
+
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# El chip fisico de esta placa es un ESP32-P4 revision v1.3. El default de
+# ESP-IDF para esp32p4 exige revision >=v3.1 (bootloader rechaza flashear en
+# hardware mas viejo con "requires chip revision in range [v3.1 - v3.99]").
+# Sin esto fijado aca, cualquier reconfigure completo del target lo pierde.
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
+CONFIG_ESP32P4_REV_MIN_0=y
+
+# La placa tiene PSRAM externa (16-line/Hex) requerida para el framebuffer del
+# panel MIPI-DSI (ST7701) y para el pool de memoria de LVGL
+# (managed_components/lv_conf.h reserva 256KB de PSRAM via LV_MEM_POOL_ALLOC).
+# Sin esto, "no memory for frame buffer" al crear el panel y "disp != NULL"
+# assert en app_main.
+CONFIG_SPIRAM=y
+
+# app_main() corre create_screens() (eez-studio, ahora con Settings>Encoder y
+# SystemInfo>Update adentro) en la tarea "main". Historial de pruebas en la
+# placa real (ESP32-P4, heap interno limitado ANTES de que arranque el
+# scheduler, donde se reserva este stack junto con el de IDLE/Timer):
+#   3584  (default) -> arranca bien, pero "Stack protection fault" en medio
+#                        de create_screens() (desborda durante el armado de UI)
+#   4608  -> mismo desborde, insuficiente
+#   7168  -> valor actual, probando
+#   10240 -> rompe la creacion de la tarea IDLE misma (vApplicationGetIdleTaskMemory)
+#   24576 -> rompe la creacion de la propia tarea "main" (esp_startup_start_app)
+# Ademas se redujo el uso real de stack en ui/screens.c (bloques {} anidados
+# en vez de variables locales planas para Encoder/Update), pero no alcanzo
+# solo con eso a 4608.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=7168
+
+# Usar managed_components/lv_conf.h en vez de la config de LVGL por Kconfig.
+# Sin esto, cualquier "idf.py set-target" regenera sdkconfig con el default de
+# LVGL (CONFIG_LV_CONF_SKIP=y), lv_conf.h deja de incluirse, y vuelven los
+# errores "lv_font_montserrat_XX undeclared".
+CONFIG_LV_CONF_SKIP=n
+
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
+CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=16384
+CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=16384
+CONFIG_MBEDTLS_DYNAMIC_BUFFER=y

@@ -1,0 +1,30 @@
+## IDF Component Manager Manifest File
+dependencies:
+  ## Required IDF version
+  idf:
+    version: '>=4.1.0'
+  # # Put list of dependencies here
+  # # For components maintained by Espressif:
+  # component: "~1.0.0"
+  # # For 3rd party components:
+  # username/component: ">=1.0.0,<2.0.0"
+  # username2/component2:
+  #   version: "~1.0.0"
+  #   # For transient dependencies `public` flag can be set.
+  #   # `public` flag doesn't have an effect dependencies of the `main` component.
+  #   # All dependencies of `main` are public by default.
+  #   public: true
+  espressif/esp_lcd_st7701: ^2.0.2
+  espressif/esp_lcd_touch_gt911: ^1.2.0~2
+  lvgl/lvgl: ^9.5.0
+  espressif/esp_lvgl_port: ^2.7.2
+  espressif/esp_lvgl_adapter: ^0.4.2
+  # WiFi del ESP32-P4 vía el ESP32-C6 integrado en el módulo (enlace SDIO interno)
+  espressif/esp_wifi_remote: "*"
+  # Copia local de esp_hosted (normalmente dependencia transitiva privada de
+  # esp_wifi_remote, ver dependencies.lock) para poder diferir su
+  # inicializacion SDIO (originalmente un constructor de C que corre antes de
+  # app_main(), sin importar si el WiFi esta activado) hasta que el usuario
+  # active el WiFi manualmente. Ver components/esp_hosted/host/port/esp/freertos/src/port_esp_hosted_host_init.c
+  espressif/esp_hosted:
+    override_path: "../components/esp_hosted"

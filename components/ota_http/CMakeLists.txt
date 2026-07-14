@@ -1,0 +1,3 @@
+idf_component_register(SRCS "ota_http.c"
+                    INCLUDE_DIRS "."
+                    REQUIRES esp_http_client esp_https_ota esp-tls app_update esp_app_format)
