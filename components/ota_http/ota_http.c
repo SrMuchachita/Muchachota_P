@@ -19,6 +19,7 @@ static const char *TAG = "ota_http";
 
 static ota_http_config_t s_cfg;
 static SemaphoreHandle_t s_wifi_connected_sem = NULL;
+static SemaphoreHandle_t s_update_confirmed_sem = NULL;
 static bool s_started = false;
 
 #define OTA_VERSION_BUF_LEN 128
@@ -108,6 +109,10 @@ static esp_err_t download_and_flash(const char *firmware_url)
 {
     ESP_LOGW(TAG, "Descargando nuevo firmware: %s", firmware_url);
 
+    if (s_cfg.before_download) {
+        s_cfg.before_download();
+    }
+
     esp_http_client_config_t http_cfg = {
         .url                   = firmware_url,
         .crt_bundle_attach     = esp_crt_bundle_attach,
@@ -125,11 +130,17 @@ static esp_err_t download_and_flash(const char *firmware_url)
     esp_err_t err = esp_https_ota(&ota_cfg);
     if (err == ESP_OK) {
         ESP_LOGW(TAG, "OTA OK, reiniciando...");
+        if (s_cfg.before_restart) {
+            s_cfg.before_restart();
+        }
         esp_restart();
         return ESP_OK; // no se llega aqui
     }
 
     ESP_LOGE(TAG, "OTA fallo: %s", esp_err_to_name(err));
+    if (s_cfg.on_download_failed) {
+        s_cfg.on_download_failed();
+    }
     return err;
 }
 
@@ -149,8 +160,18 @@ static void ota_task(void *arg)
             ESP_LOGI(TAG, "Version local: %s | Version remota: %s", app_desc->version, remote_version);
 
             if (strcmp(app_desc->version, remote_version) != 0) {
+                if (s_cfg.on_update_available) {
+                    ESP_LOGI(TAG, "Actualizacion disponible: %s (esperando confirmacion)", remote_version);
+                    s_cfg.on_update_available(remote_version);
+                    // Se bloquea hasta que el usuario toque "Actualizar" en la UI
+                    // (ota_http_confirm_update()). La URL de descarga siempre
+                    // apunta a "latest", asi que si aparece una version aun mas
+                    // nueva mientras se espera, se descarga esa igual.
+                    xSemaphoreTake(s_update_confirmed_sem, portMAX_DELAY);
+                }
                 download_and_flash(s_cfg.firmware_url);
                 // Si download_and_flash tuvo exito, el dispositivo ya reinicio.
+                // Si fallo, seguimos el loop normal y se reintenta mas adelante.
             } else {
                 ESP_LOGI(TAG, "Firmware al dia");
             }
@@ -177,6 +198,9 @@ void ota_http_start(const ota_http_config_t *config)
     if (!s_wifi_connected_sem) {
         s_wifi_connected_sem = xSemaphoreCreateBinary();
     }
+    if (!s_update_confirmed_sem) {
+        s_update_confirmed_sem = xSemaphoreCreateBinary();
+    }
 
     xTaskCreate(ota_task, "ota_task", 8192, NULL, 5, NULL);
 }
@@ -185,5 +209,12 @@ void ota_http_notify_connected(void)
 {
     if (s_wifi_connected_sem) {
         xSemaphoreGive(s_wifi_connected_sem);
+    }
+}
+
+void ota_http_confirm_update(void)
+{
+    if (s_update_confirmed_sem) {
+        xSemaphoreGive(s_update_confirmed_sem);
     }
 }

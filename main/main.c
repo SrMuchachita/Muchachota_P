@@ -45,6 +45,7 @@
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "esp_hosted.h"
+#include "esp_app_desc.h"
 #include "ota_http.h"
 #include "ui/lock_logos.h" // logotipo/isotipo Welltepp para pantalla de bloqueo
 #include "main.h"
@@ -56,10 +57,14 @@
 
 
 //******************************************** SERIAL NUMBER ****************************************************************** */
-#define SERIAL_NUMBER     "260005" // 6CARACTERES
+#define SERIAL_NUMBER     "260007" // 6CARACTERES
 
 //******************************************** VERSION INFO ****************************************************************** */
-#define FW_VERSION        "v1.2.1"  // Version de firmware
+// FW_VERSION ya NO es un define fijo — se lee en runtime de
+// esp_app_get_description()->version (viene de CMakeLists.txt
+// project(... VERSION x.x.x), el mismo valor que usa el OTA para comparar),
+// asi que la fila "Firmware :" en System Info siempre refleja el build
+// realmente corriendo, incluso despues de una actualizacion OTA.
 #define HW_REVISION       "Rev B"   // Revision de hardware
 #define LVGL_VERSION_STR  "v9.2"    // Version de LVGL
 #define ESPIDF_VERSION    "v5.4"    // Version de ESP-IDF
@@ -307,27 +312,149 @@ static void update_panel_set_status(const char *text, bool led_on)
     if (objects.update_led) lv_led_set_brightness(objects.update_led, led_on ? 255 : 0);
 }
 
+// "Network: WTP TALLER" solo tiene sentido mostrarlo cuando el WiFi esta
+// realmente conectado (con IP) — antes de eso (apagado, conectando,
+// reconectando) queda oculto. Sin lock: mismo patron que
+// update_panel_set_status().
+static void update_network_label_set_visible(bool visible)
+{
+    if (!objects.update_network_label) return;
+    if (visible) lv_obj_remove_flag(objects.update_network_label, LV_OBJ_FLAG_HIDDEN);
+    else         lv_obj_add_flag(objects.update_network_label, LV_OBJ_FLAG_HIDDEN);
+}
+
+// Pone el boton "Actualizar" en amarillo con la version nueva, y lo muestra.
+// Sin lock: se llama tanto desde contexto LVGL (al reintentar tras un fallo,
+// ver mas abajo) como, via HMI_LV_LOCKED, desde ota_update_available_cb()
+// (tarea de OTA, fuera de la tarea de render de LVGL).
+static void update_available_btn_show(const char *version)
+{
+    if (!objects.update_available_btn) return;
+
+    char buf[40];
+    snprintf(buf, sizeof(buf), "Update %s", version);
+
+    lv_obj_remove_flag(objects.update_available_btn, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_state(objects.update_available_btn, LV_STATE_DISABLED);
+    lv_obj_set_style_bg_color(objects.update_available_btn, lv_color_hex(0xfff5c518), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_color(objects.update_available_btn, lv_color_hex(0xfff5c518), LV_PART_MAIN | LV_STATE_DEFAULT);
+
+    lv_obj_t *lbl = lv_obj_get_child(objects.update_available_btn, 0);
+    if (lbl) {
+        lv_label_set_text(lbl, buf);
+        lv_obj_set_style_text_color(lbl, lv_color_hex(0xff1a1a1a), LV_PART_MAIN | LV_STATE_DEFAULT);
+    }
+}
+
+// Callback de ota_http (components/ota_http): corre en la tarea de OTA, NO en
+// la tarea de render de LVGL — hay que tomar el lock del adaptador antes de
+// tocar el arbol de widgets.
+static void ota_update_available_cb(const char *new_version)
+{
+    HMI_LV_LOCKED(update_available_btn_show(new_version));
+}
+
+// Llamado por ota_http justo antes de esp_restart() tras un OTA exitoso. El
+// backlight es un LED por PWM totalmente aparte del controlador del panel
+// MIPI-DSI: al reiniciar, el panel pierde su configuracion y muestra video
+// sin inicializar (tipicamente un color solido, ej. celeste) hasta que el
+// firmware nuevo lo reprograma, varios segundos despues. Apagando el
+// backlight antes del reset, esa ventana queda oculta (pantalla negra) en
+// vez de visible — no toca lv_obj nada, es directo sobre el LEDC del
+// backlight, asi que no hace falta esp_lv_adapter_lock().
+static void ota_before_restart_cb(void)
+{
+    lcd_set_brightness(0);
+}
+
+// Muestra/oculta el overlay "Actualizando..." — pantalla fija, sin numeros
+// que cambien, para no reintroducir redibujados dinamicos durante la
+// descarga. Sin lock: llamar siempre envuelto en HMI_LV_LOCKED desde fuera
+// de la tarea de render.
+static void ota_progress_overlay_show(void)
+{
+    if (!objects.ota_progress_overlay) return;
+    lv_obj_move_foreground(objects.ota_progress_overlay);
+    lv_obj_remove_flag(objects.ota_progress_overlay, LV_OBJ_FLAG_HIDDEN);
+}
+static void ota_progress_overlay_hide(void)
+{
+    if (objects.ota_progress_overlay) lv_obj_add_flag(objects.ota_progress_overlay, LV_OBJ_FLAG_HIDDEN);
+}
+
+// Llamado por ota_http justo antes de arrancar la descarga real. Escribir
+// cada pagina del firmware a la flash SPI pausa brevemente AMBOS nucleos
+// (proteccion de bajo nivel de ESP-IDF, no evitable por scheduling/prioridad
+// de tareas), asi que la tarea de render de LVGL no puede mantener el panel
+// al dia durante esas pausas — el celeste disimulado ayuda pero no lo tapa
+// del todo. Mostramos "Actualizando..." ~2s (tiempo para que el usuario lo
+// lea) y despues apagamos el backlight para el resto de la descarga —
+// mismo mecanismo que ya funciona para el reinicio. Corre en la tarea de
+// OTA, asi que este vTaskDelay solo atrasa el inicio de la descarga 2s, no
+// bloquea la UI.
+static void ota_before_download_cb(void)
+{
+    HMI_LV_LOCKED(ota_progress_overlay_show());
+    lcd_set_brightness(100);
+    vTaskDelay(pdMS_TO_TICKS(2000));
+    lcd_set_brightness(0);
+}
+
+// Llamado por ota_http si la descarga fallo (red caida, etc.). A diferencia
+// del caso exitoso, aca el equipo NO reinicia — sigue mostrando la UI
+// normal, asi que hay que ocultar el overlay y volver a prender el
+// backlight (ota_before_download_cb lo dejo apagado durante la descarga).
+static void ota_download_failed_cb(void)
+{
+    HMI_LV_LOCKED(ota_progress_overlay_hide());
+    lcd_set_brightness(100);
+}
+
+// Click en "Actualizar": autoriza la descarga a la tarea de OTA (bloqueada
+// esperando ota_http_confirm_update()) y muestra feedback inmediato. Corre en
+// contexto LVGL (el propio click), asi que NO hay que tomar el lock aca.
+void update_confirm_cb(lv_event_t *e)
+{
+    (void)e;
+    if (!objects.update_available_btn) return;
+
+    lv_obj_t *lbl = lv_obj_get_child(objects.update_available_btn, 0);
+    if (lbl) lv_label_set_text(lbl, g_lang->lbl_updating);
+    lv_obj_add_state(objects.update_available_btn, LV_STATE_DISABLED);
+
+    ota_http_confirm_update();
+}
+
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                                 int32_t event_id, void *event_data)
 {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
-        HMI_LV_LOCKED(update_panel_set_status("Conectando...", false));
+        HMI_LV_LOCKED({
+            update_panel_set_status(g_lang->lbl_connecting, false);
+            update_network_label_set_visible(false);
+        });
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         // Si el usuario apago el WiFi a proposito (hmi_wifi_set_enabled(false)
         // ya hizo esp_wifi_disconnect()), no reintentar ni pisar el estado "apagado".
         if (s_wifi_enabled) {
             ESP_LOGW(TAG, "WiFi desconectado, reintentando...");
             esp_wifi_connect();
-            HMI_LV_LOCKED(update_panel_set_status("Reconectando...", false));
+            HMI_LV_LOCKED({
+                update_panel_set_status(g_lang->lbl_reconnecting, false);
+                update_network_label_set_visible(false);
+            });
         }
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         ESP_LOGI(TAG, "WiFi conectado, IP: " IPSTR, IP2STR(&event->ip_info.ip));
         ota_http_notify_connected();
         char buf[48];
-        snprintf(buf, sizeof(buf), "Conectado: " IPSTR, IP2STR(&event->ip_info.ip));
-        HMI_LV_LOCKED(update_panel_set_status(buf, true));
+        snprintf(buf, sizeof(buf), "%s" IPSTR, g_lang->lbl_connected_prefix, IP2STR(&event->ip_info.ip));
+        HMI_LV_LOCKED({
+            update_panel_set_status(buf, true);
+            update_network_label_set_visible(true);
+        });
     }
 }
 
@@ -645,7 +772,7 @@ void app_main(void)
             lv_obj_t *panel = objects.sysinfo_content_version;
             if (panel) {
                 lv_obj_t *row;
-                row = lv_obj_get_child(panel, 1); if (row) lv_label_set_text(lv_obj_get_child(row, 1), FW_VERSION);
+                row = lv_obj_get_child(panel, 1); if (row) lv_label_set_text(lv_obj_get_child(row, 1), esp_app_get_description()->version);
                 row = lv_obj_get_child(panel, 2); if (row) lv_label_set_text(lv_obj_get_child(row, 1), HW_REVISION);
                 row = lv_obj_get_child(panel, 3); if (row) lv_label_set_text(lv_obj_get_child(row, 1), LVGL_VERSION_STR);
                 row = lv_obj_get_child(panel, 4); if (row) lv_label_set_text(lv_obj_get_child(row, 1), ESPIDF_VERSION);
@@ -1102,26 +1229,32 @@ static void hmi_wifi_set_enabled(bool enable)
             s_wifi_initialized = true;
 
             ota_http_config_t ota_cfg = {
-                .version_url        = OTA_VERSION_URL,
-                .firmware_url       = OTA_FIRMWARE_URL,
-                .check_interval_sec = OTA_CHECK,
+                .version_url         = OTA_VERSION_URL,
+                .firmware_url        = OTA_FIRMWARE_URL,
+                .check_interval_sec  = OTA_CHECK,
+                .on_update_available = ota_update_available_cb,
+                .before_restart      = ota_before_restart_cb,
+                .before_download     = ota_before_download_cb,
+                .on_download_failed  = ota_download_failed_cb,
             };
             ota_http_start(&ota_cfg);
         } else {
             esp_wifi_start();
         }
-        update_panel_set_status("Conectando...", false);
+        update_panel_set_status(g_lang->lbl_connecting, false);
+        update_network_label_set_visible(false);
     } else {
         if (s_wifi_initialized) {
             esp_wifi_disconnect();
             esp_wifi_stop();
         }
-        update_panel_set_status("WiFi apagado", false);
+        update_panel_set_status(g_lang->lbl_wifi_off, false);
+        update_network_label_set_visible(false);
     }
 
     if (objects.update_toggle_btn) {
         lv_obj_t *lbl = lv_obj_get_child(objects.update_toggle_btn, 0);
-        if (lbl) lv_label_set_text(lbl, s_wifi_enabled ? "Desactivar WiFi" : "Activar WiFi");
+        if (lbl) lv_label_set_text(lbl, s_wifi_enabled ? g_lang->btn_disable_wifi : g_lang->btn_enable_wifi);
         hmi_style_btn(objects.update_toggle_btn, s_wifi_enabled);
     }
 }
@@ -1147,6 +1280,17 @@ void hmi_deactivate_dynamic_nav(void)
     if (s_serial_btn) hmi_style_btn(s_serial_btn,  false);
     if (s_test_btn)   hmi_style_btn(s_test_btn,    false);
     if (s_dev_btn)    hmi_style_btn(s_dev_btn,     false);
+
+    // Ocultar tambien los paneles (no solo despintar los botones) — sin esto,
+    // si un panel de modo desarrollador (Logs/Val/Joystick/Serial/Test/Dev)
+    // estaba abierto y el usuario toca Device/Version/Guide/Update, el panel
+    // dinamico se queda "colado" por detras del panel fijo que se muestra.
+    if (s_logs_panel)   lv_obj_add_flag(s_logs_panel,   LV_OBJ_FLAG_HIDDEN);
+    if (s_val_panel)    lv_obj_add_flag(s_val_panel,    LV_OBJ_FLAG_HIDDEN);
+    if (s_joy_panel)    lv_obj_add_flag(s_joy_panel,    LV_OBJ_FLAG_HIDDEN);
+    if (s_serial_panel) lv_obj_add_flag(s_serial_panel, LV_OBJ_FLAG_HIDDEN);
+    if (s_test_panel)   lv_obj_add_flag(s_test_panel,   LV_OBJ_FLAG_HIDDEN);
+    if (s_dev_panel)    lv_obj_add_flag(s_dev_panel,    LV_OBJ_FLAG_HIDDEN);
 }
 
 // NVS helpers
@@ -1263,8 +1407,7 @@ static void enc_recalc_footer(void)
     float pulses_per_m   = (perim_mm > 0.0f) ? ((float)ppr * 1000.0f / perim_mm) : 0.0f;
 
     char buf[160];
-    snprintf(buf, sizeof(buf),
-             "1 pulso = %.3f mm  \xC2\xB7  1 m = %.1f pulsos  \xC2\xB7  Formula: dist = pulsos x %.2f / (%ld x 1000)",
+    snprintf(buf, sizeof(buf), g_lang->fmt_encoder_footer,
              mm_per_pulse, pulses_per_m, perim_mm, (long)ppr);
     lv_label_set_text(objects.enc_footer_label, buf);
 }
@@ -1403,7 +1546,7 @@ static void encoder_display_toggle_create(void)
     lv_obj_t *lbl_p = lv_label_create(btn_p);
     lv_obj_set_style_align(lbl_p, LV_ALIGN_CENTER, 0);
     lv_obj_set_style_text_font(lbl_p, &lv_font_montserrat_12, 0);
-    lv_label_set_text(lbl_p, "PULSOS");
+    lv_label_set_text(lbl_p, g_lang->btn_pulses);
     lv_obj_add_event_cb(btn_p, encoder_mode_pulses_cb, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t *btn_m = lv_button_create(objects.obj17);
@@ -1415,7 +1558,7 @@ static void encoder_display_toggle_create(void)
     lv_obj_t *lbl_m = lv_label_create(btn_m);
     lv_obj_set_style_align(lbl_m, LV_ALIGN_CENTER, 0);
     lv_obj_set_style_text_font(lbl_m, &lv_font_montserrat_12, 0);
-    lv_label_set_text(lbl_m, "METROS");
+    lv_label_set_text(lbl_m, g_lang->btn_meters);
     lv_obj_add_event_cb(btn_m, encoder_mode_meters_cb, LV_EVENT_CLICKED, NULL);
 
     // Restaurar el modo guardado en NVS (default: pulsos, igual que el label
@@ -1424,6 +1567,37 @@ static void encoder_display_toggle_create(void)
     // el usuario toca un boton).
     bool saved_meters = dev_nvs_read_pin(NVS_KEY_ENC_MODE_METERS, 0) != 0;
     encoder_mode_apply(saved_meters);
+}
+
+// Llamado desde lang_apply() (ui/lang.c) al final, para refrescar textos que
+// dependen de estado que solo main.c conoce (boton/estado de WiFi, toggle
+// Pulsos/Metros, formula del footer de Encoder) cuando cambia el idioma.
+void hmi_extra_panels_apply_lang(void)
+{
+    // Boton toggle de WiFi: el texto depende del estado actual (activado/desactivado)
+    if (objects.update_toggle_btn) {
+        lv_obj_t *lbl = lv_obj_get_child(objects.update_toggle_btn, 0);
+        if (lbl) lv_label_set_text(lbl, s_wifi_enabled ? g_lang->btn_disable_wifi : g_lang->btn_enable_wifi);
+    }
+    // Estado de conexion: solo corregimos el caso "apagado" en reposo; los
+    // textos de Conectando/Reconectando/Conectado los pisa el proximo evento
+    // de WiFi si esta prendido.
+    if (!s_wifi_enabled) {
+        update_panel_set_status(g_lang->lbl_wifi_off, false);
+    }
+
+    // Toggle Pulsos/Metros del dashboard
+    if (s_encoder_btn_pulses) {
+        lv_obj_t *lbl = lv_obj_get_child(s_encoder_btn_pulses, 0);
+        if (lbl) lv_label_set_text(lbl, g_lang->btn_pulses);
+    }
+    if (s_encoder_btn_meters) {
+        lv_obj_t *lbl = lv_obj_get_child(s_encoder_btn_meters, 0);
+        if (lbl) lv_label_set_text(lbl, g_lang->btn_meters);
+    }
+
+    // Formula del footer de Encoder (numeros + texto en el idioma actual)
+    enc_recalc_footer();
 }
 
 // Forward declarations
@@ -2058,6 +2232,7 @@ static void serial_show_cb(lv_event_t *e)
     lv_obj_add_flag(objects.sysinfo_content_device,  LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(objects.sysinfo_content_version, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(objects.sysinfo_content_guide,   LV_OBJ_FLAG_HIDDEN);
+    if (objects.sysinfo_content_update) lv_obj_add_flag(objects.sysinfo_content_update, LV_OBJ_FLAG_HIDDEN);
     if (s_logs_panel)   lv_obj_add_flag(s_logs_panel,   LV_OBJ_FLAG_HIDDEN);
     if (s_dev_panel)    lv_obj_add_flag(s_dev_panel,    LV_OBJ_FLAG_HIDDEN);
     if (s_joy_panel)    lv_obj_add_flag(s_joy_panel,    LV_OBJ_FLAG_HIDDEN);
@@ -2082,6 +2257,7 @@ static void joy_show_cb(lv_event_t *e)
     lv_obj_add_flag(objects.sysinfo_content_device,  LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(objects.sysinfo_content_version, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(objects.sysinfo_content_guide,   LV_OBJ_FLAG_HIDDEN);
+    if (objects.sysinfo_content_update) lv_obj_add_flag(objects.sysinfo_content_update, LV_OBJ_FLAG_HIDDEN);
     if (s_logs_panel)   lv_obj_add_flag(s_logs_panel,   LV_OBJ_FLAG_HIDDEN);
     if (s_dev_panel)    lv_obj_add_flag(s_dev_panel,    LV_OBJ_FLAG_HIDDEN);
     if (s_serial_panel) lv_obj_add_flag(s_serial_panel, LV_OBJ_FLAG_HIDDEN);
@@ -2117,6 +2293,7 @@ static void dev_show_cb(lv_event_t *e)
     lv_obj_add_flag(objects.sysinfo_content_device,  LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(objects.sysinfo_content_version, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(objects.sysinfo_content_guide,   LV_OBJ_FLAG_HIDDEN);
+    if (objects.sysinfo_content_update) lv_obj_add_flag(objects.sysinfo_content_update, LV_OBJ_FLAG_HIDDEN);
     if (s_logs_panel)   lv_obj_add_flag(s_logs_panel,   LV_OBJ_FLAG_HIDDEN);
     if (s_serial_panel) lv_obj_add_flag(s_serial_panel, LV_OBJ_FLAG_HIDDEN);
     if (s_joy_panel)    lv_obj_add_flag(s_joy_panel,    LV_OBJ_FLAG_HIDDEN);
@@ -2140,6 +2317,7 @@ static void val_show_cb(lv_event_t *e)
     lv_obj_add_flag(objects.sysinfo_content_device,  LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(objects.sysinfo_content_version, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(objects.sysinfo_content_guide,   LV_OBJ_FLAG_HIDDEN);
+    if (objects.sysinfo_content_update) lv_obj_add_flag(objects.sysinfo_content_update, LV_OBJ_FLAG_HIDDEN);
     if (s_logs_panel)   lv_obj_add_flag(s_logs_panel,   LV_OBJ_FLAG_HIDDEN);
     if (s_dev_panel)    lv_obj_add_flag(s_dev_panel,    LV_OBJ_FLAG_HIDDEN);
     if (s_serial_panel) lv_obj_add_flag(s_serial_panel, LV_OBJ_FLAG_HIDDEN);
@@ -2616,6 +2794,7 @@ static void test_show_cb(lv_event_t *e)
     lv_obj_add_flag(objects.sysinfo_content_device,  LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(objects.sysinfo_content_version, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(objects.sysinfo_content_guide,   LV_OBJ_FLAG_HIDDEN);
+    if (objects.sysinfo_content_update) lv_obj_add_flag(objects.sysinfo_content_update, LV_OBJ_FLAG_HIDDEN);
     if (s_logs_panel)   lv_obj_add_flag(s_logs_panel,   LV_OBJ_FLAG_HIDDEN);
     if (s_dev_panel)    lv_obj_add_flag(s_dev_panel,    LV_OBJ_FLAG_HIDDEN);
     if (s_serial_panel) lv_obj_add_flag(s_serial_panel, LV_OBJ_FLAG_HIDDEN);
@@ -2836,6 +3015,7 @@ static void dev_panel_create(void)
     lv_obj_add_flag(objects.sysinfo_content_device,  LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(objects.sysinfo_content_version, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(objects.sysinfo_content_guide,   LV_OBJ_FLAG_HIDDEN);
+    if (objects.sysinfo_content_update) lv_obj_add_flag(objects.sysinfo_content_update, LV_OBJ_FLAG_HIDDEN);
 
     // Habilitar scroll en la columna de nav para los botones extra DEV/Serial/Joystick
     lv_obj_t *nav_col = lv_obj_get_parent(objects.sysinfo_btn_device);
@@ -4196,6 +4376,7 @@ static void logs_show_cb(lv_event_t *e)
     lv_obj_add_flag(objects.sysinfo_content_device,  LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(objects.sysinfo_content_version, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(objects.sysinfo_content_guide,   LV_OBJ_FLAG_HIDDEN);
+    if (objects.sysinfo_content_update) lv_obj_add_flag(objects.sysinfo_content_update, LV_OBJ_FLAG_HIDDEN);
     if (s_dev_panel)    lv_obj_add_flag(s_dev_panel,    LV_OBJ_FLAG_HIDDEN);
     if (s_serial_panel) lv_obj_add_flag(s_serial_panel, LV_OBJ_FLAG_HIDDEN);
     if (s_joy_panel)    lv_obj_add_flag(s_joy_panel,    LV_OBJ_FLAG_HIDDEN);

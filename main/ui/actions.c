@@ -269,22 +269,26 @@ static void apply_btn_style(lv_obj_t *btn, bool active) {
     if (!btn) return;
     lv_obj_t *lbl = lv_obj_get_child(btn, 0);
     if (active) {
+        lv_color_t press_bg = lv_color_darken(g_theme.bg_btn_active, 60);
+        lv_color_t press_bd = lv_color_darken(g_theme.bd_btn_active, 60);
         lv_obj_set_style_bg_color(btn,     g_theme.bg_btn_active, LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_bg_color(btn,     g_theme.bg_btn_active, LV_PART_MAIN | LV_STATE_PRESSED);
+        lv_obj_set_style_bg_color(btn,     press_bg,              LV_PART_MAIN | LV_STATE_PRESSED);
         lv_obj_set_style_bg_color(btn,     g_theme.bg_btn_active, LV_PART_MAIN | LV_STATE_CHECKED);
         lv_obj_set_style_border_color(btn, g_theme.bd_btn_active, LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_border_color(btn, g_theme.bd_btn_active, LV_PART_MAIN | LV_STATE_PRESSED);
+        lv_obj_set_style_border_color(btn, press_bd,              LV_PART_MAIN | LV_STATE_PRESSED);
         lv_obj_set_style_border_color(btn, g_theme.bd_btn_active, LV_PART_MAIN | LV_STATE_CHECKED);
         lv_obj_set_style_border_width(btn, 3,                      LV_PART_MAIN | LV_STATE_DEFAULT);
         if (lbl) lv_obj_set_style_text_color(lbl, g_theme.txt_btn_active, LV_PART_MAIN | LV_STATE_DEFAULT);
         if (lbl) lv_obj_set_style_text_color(lbl, g_theme.txt_btn_active, LV_PART_MAIN | LV_STATE_PRESSED);
         if (lbl) lv_obj_set_style_text_color(lbl, g_theme.txt_btn_active, LV_PART_MAIN | LV_STATE_CHECKED);
     } else {
+        lv_color_t press_bg = lv_color_darken(g_theme.bg_btn_inactive, 60);
+        lv_color_t press_bd = lv_color_darken(g_theme.bd_btn_inactive, 60);
         lv_obj_set_style_bg_color(btn,     g_theme.bg_btn_inactive, LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_bg_color(btn,     g_theme.bg_btn_inactive, LV_PART_MAIN | LV_STATE_PRESSED);
+        lv_obj_set_style_bg_color(btn,     press_bg,                LV_PART_MAIN | LV_STATE_PRESSED);
         lv_obj_set_style_bg_color(btn,     g_theme.bg_btn_inactive, LV_PART_MAIN | LV_STATE_CHECKED);
         lv_obj_set_style_border_color(btn, g_theme.bd_btn_inactive, LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_border_color(btn, g_theme.bd_btn_inactive, LV_PART_MAIN | LV_STATE_PRESSED);
+        lv_obj_set_style_border_color(btn, press_bd,                LV_PART_MAIN | LV_STATE_PRESSED);
         lv_obj_set_style_border_color(btn, g_theme.bd_btn_inactive, LV_PART_MAIN | LV_STATE_CHECKED);
         lv_obj_set_style_border_width(btn, 2,                        LV_PART_MAIN | LV_STATE_DEFAULT);
         if (lbl) lv_obj_set_style_text_color(lbl, g_theme.txt_btn_inactive, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -397,6 +401,36 @@ static void theme_encoder_panel(lv_obj_t *panel) {
 
     lv_obj_t *footer = lv_obj_get_child(panel, 5);
     if (footer) lv_obj_set_style_text_color(footer, g_theme.txt_secondary, LV_PART_MAIN | LV_STATE_DEFAULT);
+
+    /* Valores de los spinboxes: mismo estilo "display acentuado" que
+     * encoder_value en el dashboard — gold en Classic, azul en Dark/Light,
+     * no un dorado fijo. */
+    if (objects.enc_spinbox_perim) lv_obj_set_style_text_color(objects.enc_spinbox_perim, g_theme.txt_accent, LV_PART_MAIN | LV_STATE_DEFAULT);
+    if (objects.enc_spinbox_ppr)   lv_obj_set_style_text_color(objects.enc_spinbox_ppr,   g_theme.txt_accent, LV_PART_MAIN | LV_STATE_DEFAULT);
+}
+
+/* Botones "A"/"B" del panel Tecnologia: el color mientras se mantienen
+ * presionados sigue el tema activo (bg_btn_active/bd_btn_active — gold en
+ * Classic, azul en Dark/Light), no un amarillo fijo. */
+static void theme_technology_panel(lv_obj_t *panel) {
+    if (!panel) return;
+    theme_panel_title(panel);
+
+    lv_obj_t *desc = lv_obj_get_child(panel, 1);
+    if (desc) lv_obj_set_style_text_color(desc, g_theme.txt_secondary, LV_PART_MAIN | LV_STATE_DEFAULT);
+
+    if (objects.tech_desc_a) lv_obj_set_style_text_color(objects.tech_desc_a, g_theme.txt_secondary, LV_PART_MAIN | LV_STATE_DEFAULT);
+    if (objects.tech_desc_b) lv_obj_set_style_text_color(objects.tech_desc_b, g_theme.txt_secondary, LV_PART_MAIN | LV_STATE_DEFAULT);
+
+    lv_obj_t *btns[2] = { objects.tech_btn_a, objects.tech_btn_b };
+    for (int i = 0; i < 2; i++) {
+        lv_obj_t *btn = btns[i];
+        if (!btn) continue;
+        lv_obj_set_style_bg_color(btn,     g_theme.bg_btn_active, LV_PART_MAIN | LV_STATE_PRESSED);
+        lv_obj_set_style_border_color(btn, g_theme.bd_btn_active, LV_PART_MAIN | LV_STATE_PRESSED);
+        lv_obj_t *lbl = lv_obj_get_child(btn, 0);
+        if (lbl) lv_obj_set_style_text_color(lbl, g_theme.txt_btn_active, LV_PART_MAIN | LV_STATE_PRESSED);
+    }
 }
 
 /* Weak: reaplicado en main.c para recolorear el boton toggle de WiFi (su
@@ -420,8 +454,9 @@ static void theme_update_panel(lv_obj_t *panel) {
         if (status_lbl) lv_obj_set_style_text_color(status_lbl, g_theme.txt_primary, LV_PART_MAIN | LV_STATE_DEFAULT);
     }
 
-    lv_obj_t *info_lbl = lv_obj_get_child(panel, 3);
-    if (info_lbl) lv_obj_set_style_text_color(info_lbl, g_theme.txt_secondary, LV_PART_MAIN | LV_STATE_DEFAULT);
+    if (objects.update_network_label) lv_obj_set_style_text_color(objects.update_network_label, g_theme.txt_secondary, LV_PART_MAIN | LV_STATE_DEFAULT);
+
+    if (objects.update_duration_note) lv_obj_set_style_text_color(objects.update_duration_note, g_theme.txt_secondary, LV_PART_MAIN | LV_STATE_DEFAULT);
 
     hmi_update_panel_retheme();
 }
@@ -485,28 +520,30 @@ void action_sysinfo_btn_update(lv_event_t *e) {
 /* ---- Settings navigation ---- */
 
 static void settings_set_nav_active(lv_obj_t *active_btn) {
-    lv_obj_t *btns[6] = {
+    lv_obj_t *btns[7] = {
         objects.settings_btn_brightness,
         objects.settings_btn_theme,
         objects.settings_btn_battery,
         objects.settings_btn_language,
         objects.settings_btn_user,
-        objects.settings_btn_encoder
+        objects.settings_btn_encoder,
+        objects.settings_btn_tecnologia
     };
-    for (int i = 0; i < 6; i++)
+    for (int i = 0; i < 7; i++)
         apply_btn_style(btns[i], btns[i] == active_btn);
 }
 
 static void settings_show_panel(lv_obj_t *panel) {
-    lv_obj_t *panels[6] = {
+    lv_obj_t *panels[7] = {
         objects.settings_content_brightness,
         objects.settings_content_theme,
         objects.settings_content_battery,
         objects.settings_content_language,
         objects.settings_content_user,
-        objects.settings_content_encoder
+        objects.settings_content_encoder,
+        objects.settings_content_tecnologia
     };
-    for (int i = 0; i < 6; i++) {
+    for (int i = 0; i < 7; i++) {
         if (!panels[i]) continue;
         if (panels[i] == panel)
             lv_obj_remove_flag(panels[i], LV_OBJ_FLAG_HIDDEN);
@@ -555,6 +592,37 @@ void action_settings_btn_encoder(lv_event_t *e) {
     g_settings_active_nav = objects.settings_btn_encoder;
     settings_set_nav_active(objects.settings_btn_encoder);
     settings_show_panel(objects.settings_content_encoder);
+}
+
+void action_settings_btn_tecnologia(lv_event_t *e) {
+    g_settings_active_nav = objects.settings_btn_tecnologia;
+    settings_set_nav_active(objects.settings_btn_tecnologia);
+    settings_show_panel(objects.settings_content_tecnologia);
+}
+
+// Botones "A"/"B" del panel Tecnologia: mientras estan presionados mandan 1
+// por el serial HMI (la placa de consola prende el LED correspondiente), y
+// al soltarlos mandan 0 (lo apagan). PRESS_LOST cubre el caso de que el dedo
+// se deslice fuera del boton sin soltar — sin esto el LED podria quedar
+// prendido para siempre.
+void action_settings_video_tech_press(lv_event_t *e) {
+    (void)e;
+    hmi_send_data(HMI_REG_VIDEO_TECH, 1);
+}
+
+void action_settings_video_tech_release(lv_event_t *e) {
+    (void)e;
+    hmi_send_data(HMI_REG_VIDEO_TECH, 0);
+}
+
+void action_settings_video_tech_b_press(lv_event_t *e) {
+    (void)e;
+    hmi_send_data(HMI_REG_VIDEO_TECH_B, 1);
+}
+
+void action_settings_video_tech_b_release(lv_event_t *e) {
+    (void)e;
+    hmi_send_data(HMI_REG_VIDEO_TECH_B, 0);
 }
 
 void action_settings_user_edit_name(lv_event_t *e) {
@@ -879,6 +947,9 @@ static void apply_theme(int t) {
 
     /* Encoder panel */
     theme_encoder_panel(objects.settings_content_encoder);
+
+    /* Tecnologia panel (titulo, descripcion, y color PRESSED de los botones A/B) */
+    theme_technology_panel(objects.settings_content_tecnologia);
 
     /* ---- 9. SYSTEM INFO tab ---- */
     /* Nav column container (parent of the 4 sysinfo nav buttons) */

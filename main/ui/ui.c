@@ -33,6 +33,8 @@ void ui_init() {
     create_panel_sysinfo_update();
     create_panel_settings_theme_battery_lang_user();
     create_panel_sysinfo_version_guide();
+    create_panel_settings_tecnologia();
+    create_ota_progress_overlay();
     enc_settings_load_from_nvs();
     hmi_theme_apply(1); /* Apply Classic theme to all widgets after screen creation */
     loadScreen(SCREEN_ID_MAIN);

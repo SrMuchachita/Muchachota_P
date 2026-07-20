@@ -1,0 +1,150 @@
+========================================================================
+ MANUAL: COMO PUBLICAR UNA ACTUALIZACION OTA (WP_P_V9_UP)
+========================================================================
+
+Este manual explica como instalar lo necesario UNA SOLA VEZ, y despues
+como publicar cada actualizacion nueva del firmware para que las
+consolas la reciban solas por WiFi.
+
+
+------------------------------------------------------------------------
+PARTE 1 — INSTALACION (se hace una sola vez en esta PC)
+------------------------------------------------------------------------
+
+1) Instalar GitHub CLI (el programa "gh" que sube los releases a GitHub)
+
+   Abrir PowerShell y correr:
+
+       winget install --id GitHub.cli
+
+   (Alternativa: descargarlo desde https://cli.github.com)
+
+   IMPORTANTE: despues de instalarlo, CERRAR VSCODE POR COMPLETO Y
+   VOLVER A ABRIRLO. Si no lo reiniciás, las terminales que abras
+   van a seguir sin encontrar el comando "gh" (VSCode guarda el PATH
+   viejo hasta que lo reiniciás del todo, no alcanza con abrir una
+   pestaña de terminal nueva).
+
+
+2) Autenticar GitHub CLI con tu cuenta
+
+   En una terminal (despues de reiniciar VSCode), correr:
+
+       gh auth login
+
+   Es interactivo: te va a preguntar:
+     - "GitHub.com" (opcion por defecto)
+     - "HTTPS" como protocolo
+     - Logueate con el navegador (abre una pagina, pegás un codigo)
+
+   Para confirmar que quedo bien autenticado:
+
+       gh auth status
+
+   Deberia decir algo como:
+       ✓ Logged in to github.com account SrMuchachita
+
+
+3) Verificar que el repositorio este conectado
+
+   Desde la carpeta del proyecto (WP_P_V9_UP), correr:
+
+       git remote -v
+
+   Deberia mostrar:
+       origin  https://github.com/SrMuchachita/Muchachota_P.git (fetch)
+       origin  https://github.com/SrMuchachita/Muchachota_P.git (push)
+
+   Si no muestra nada o esta mal, avisar antes de seguir.
+
+
+------------------------------------------------------------------------
+PARTE 2 — COMO PUBLICAR UNA ACTUALIZACION (cada vez que hay firmware nuevo)
+------------------------------------------------------------------------
+
+1) Abrir una terminal CON EL ENTORNO DE ESP-IDF activo:
+   En VSCode: Ctrl+Shift+P -> escribir y elegir
+   "ESP-IDF: Open ESP-IDF Terminal"
+
+2) Editar el archivo CMakeLists.txt (raiz del proyecto) y subir el numero
+   de version en esta linea:
+
+       project(WP_P_V9_UP VERSION 1.0.3)
+
+   Cambiarlo por ejemplo a 1.0.4 (siempre mas alto que el anterior).
+   Guardar el archivo.
+
+3) En la terminal de ESP-IDF, pararse en la carpeta del proyecto y correr:
+
+       .\publish.ps1
+
+   (Opcional, para dejar un comentario en el release):
+       .\publish.ps1 -Notes "Que se corrigio o agrego en esta version"
+
+4) El script hace todo solo:
+     - Compila el firmware completo (idf.py build)
+     - Crea un "Release" en GitHub con el nombre "v1.0.4" y le adjunta
+       el archivo WP_P_V9_UP.bin
+     - Actualiza el archivo version.json con el numero nuevo
+     - Hace commit y push de ese cambio a GitHub
+
+   Si todo salio bien, el final del log dice algo como:
+       "Release v1.0.4 publicado correctamente."
+
+   Se puede verificar entrando a:
+       https://github.com/SrMuchachita/Muchachota_P/releases
+
+
+------------------------------------------------------------------------
+PARTE 3 — COMO LO RECIBE LA CONSOLA (el equipo con la pantalla)
+------------------------------------------------------------------------
+
+1) El equipo tiene que tener flasheada una version DISTINTA (mas vieja)
+   a la que acabas de publicar. No hace falta reflashear el equipo con
+   el build nuevo — la idea es que se actualice solo por WiFi.
+
+2) En la pantalla del equipo: ir a System Info -> Update -> tocar
+   "Activar WiFi" (el WiFi arranca apagado por defecto en cada
+   encendido, hay que activarlo a mano).
+
+3) Una vez conectado, el equipo chequea la version cada 20 segundos
+   (variable OTA_CHECK en main.c). Cuando detecta que hay una version
+   distinta a la que tiene instalada, aparece un boton amarillo al lado
+   de "Activar WiFi" que dice "Actualizar v1.0.4" (o el numero que
+   corresponda).
+
+4) Tocar ese boton amarillo. El texto cambia a "Actualizando..." y el
+   equipo descarga el firmware nuevo y se reinicia solo cuando termina.
+
+5) Al volver a prender, System Info -> Version -> "Firmware :" deberia
+   mostrar el numero de version nuevo, confirmando que se actualizo.
+
+
+------------------------------------------------------------------------
+PROBLEMAS COMUNES
+------------------------------------------------------------------------
+
+- "gh no se reconoce como comando" al correr publish.ps1:
+  El PATH de esa terminal no tiene a "gh" todavia. Solucion rapida sin
+  reiniciar nada (en esa misma terminal):
+
+      $env:Path += ";C:\Program Files\GitHub CLI"
+      .\publish.ps1
+
+  Solucion definitiva: cerrar VSCode del todo y volver a abrirlo.
+
+- "idf.py build fallo" / "cmake no encontrado":
+  Te parè en una terminal que NO tiene el entorno de ESP-IDF activo.
+  Hay que abrir la terminal con Ctrl+Shift+P ->
+  "ESP-IDF: Open ESP-IDF Terminal" (no una PowerShell comun).
+
+- El boton amarillo "Actualizar" nunca aparece:
+  Confirmar que el WiFi este activado en el equipo (System Info ->
+  Update) y que la version publicada sea realmente distinta a la
+  instalada. Tambien puede tardar hasta 20 segundos en chequear.
+
+- Durante la descarga la pantalla parpadea en celeste:
+  Es un efecto conocido — la descarga+flasheo le saca CPU al dibujado
+  de la pantalla por unos segundos. No corta la actualizacion, es solo
+  visual.
+========================================================================

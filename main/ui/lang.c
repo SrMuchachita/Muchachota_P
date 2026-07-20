@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include "lang.h"
 #include "screens.h"
 
@@ -68,6 +69,31 @@ static const lang_strings_t s_es = {
     .title_dev_mode          = "MODO DESARROLLADOR",
     .sub_change_pin          = "Ingresa el nuevo PIN de 4 digitos",
     .sub_enter_pin           = "Ingresa el PIN para continuar",
+    .nav_encoder             = "Encoder",
+    .title_encoder           = " ENCODER",
+    .desc_encoder            = "Perimetro del rodillo del encoder. Formula: Dist.(m) = Pulsos x Perimetro / 1000  |  Default: 85.20 mm",
+    .lbl_perimeter           = "Perimetro:",
+    .lbl_pulses_rev          = "Pulsos/vuelta:",
+    .unit_pulses_rev         = "pulsos/vuelta",
+    .fmt_encoder_footer      = "1 pulso = %.3f mm  \xC2\xB7  1 m = %.1f pulsos  \xC2\xB7  Formula: dist = pulsos x %.2f / (%ld x 1000)",
+    .nav_technology          = "Tecnologia",
+    .title_technology        = " TECNOLOGIA",
+    .desc_technology         = "Tecnologia de video",
+    .desc_tech_a             = "A: Cambio de senal de salida",
+    .desc_tech_b             = "B: Resolucion de salida de senal o cambio de modo de TV",
+    .nav_update              = "Actualizar",
+    .title_update            = " ACTUALIZAR",
+    .lbl_wifi_off            = "WiFi apagado",
+    .lbl_connecting          = "Conectando...",
+    .lbl_reconnecting        = "Reconectando...",
+    .lbl_connected_prefix    = "Conectado: ",
+    .btn_enable_wifi         = "Activar WiFi",
+    .btn_disable_wifi        = "Desactivar WiFi",
+    .lbl_updating            = "Actualizando...",
+    .lbl_network_prefix      = "Red: ",
+    .lbl_update_duration_note = "La actualizacion puede demorar aproximadamente 35 segundos",
+    .btn_pulses              = "PULSOS",
+    .btn_meters              = "METROS",
 };
 
 /* ---- English ---- */
@@ -137,6 +163,31 @@ static const lang_strings_t s_en = {
     .title_dev_mode          = "DEVELOPER MODE",
     .sub_change_pin          = "Enter the new 4-digit PIN",
     .sub_enter_pin           = "Enter the PIN to continue",
+    .nav_encoder             = "Encoder",
+    .title_encoder           = " ENCODER",
+    .desc_encoder            = "Encoder roller perimeter. Formula: Dist.(m) = Pulses x Perimeter / 1000  |  Default: 85.20 mm",
+    .lbl_perimeter           = "Perimeter:",
+    .lbl_pulses_rev          = "Pulses/rev:",
+    .unit_pulses_rev         = "pulses/rev",
+    .fmt_encoder_footer      = "1 pulse = %.3f mm  \xC2\xB7  1 m = %.1f pulses  \xC2\xB7  Formula: dist = pulses x %.2f / (%ld x 1000)",
+    .nav_technology          = "Technology",
+    .title_technology        = " TECHNOLOGY",
+    .desc_technology         = "Video technology",
+    .desc_tech_a             = "A: Output signal change",
+    .desc_tech_b             = "B: Output signal resolution or TV mode change",
+    .nav_update              = "Update",
+    .title_update            = " UPDATE",
+    .lbl_wifi_off            = "WiFi off",
+    .lbl_connecting          = "Connecting...",
+    .lbl_reconnecting        = "Reconnecting...",
+    .lbl_connected_prefix    = "Connected: ",
+    .btn_enable_wifi         = "Enable WiFi",
+    .btn_disable_wifi        = "Disable WiFi",
+    .lbl_updating            = "Updating...",
+    .lbl_network_prefix      = "Network: ",
+    .lbl_update_duration_note = "The update may take approximately 35 seconds",
+    .btn_pulses              = "PULSES",
+    .btn_meters              = "METERS",
 };
 
 /* ---- Portuguese ---- */
@@ -206,6 +257,31 @@ static const lang_strings_t s_pt = {
     .title_dev_mode          = "MODO DESENVOLVEDOR",
     .sub_change_pin          = "Digite o novo PIN de 4 digitos",
     .sub_enter_pin           = "Digite o PIN para continuar",
+    .nav_encoder             = "Encoder",
+    .title_encoder           = " ENCODER",
+    .desc_encoder            = "Perimetro do rolete do encoder. Formula: Dist.(m) = Pulsos x Perimetro / 1000  |  Padrao: 85.20 mm",
+    .lbl_perimeter           = "Perimetro:",
+    .lbl_pulses_rev          = "Pulsos/volta:",
+    .unit_pulses_rev         = "pulsos/volta",
+    .fmt_encoder_footer      = "1 pulso = %.3f mm  \xC2\xB7  1 m = %.1f pulsos  \xC2\xB7  Formula: dist = pulsos x %.2f / (%ld x 1000)",
+    .nav_technology          = "Tecnologia",
+    .title_technology        = " TECNOLOGIA",
+    .desc_technology         = "Tecnologia de video",
+    .desc_tech_a             = "A: Mudanca de sinal de saida",
+    .desc_tech_b             = "B: Resolucao de saida de sinal ou mudanca de modo de TV",
+    .nav_update              = "Atualizar",
+    .title_update            = " ATUALIZAR",
+    .lbl_wifi_off            = "WiFi desligado",
+    .lbl_connecting          = "Conectando...",
+    .lbl_reconnecting        = "Reconectando...",
+    .lbl_connected_prefix    = "Conectado: ",
+    .btn_enable_wifi         = "Ativar WiFi",
+    .btn_disable_wifi        = "Desativar WiFi",
+    .lbl_updating            = "Atualizando...",
+    .lbl_network_prefix      = "Rede: ",
+    .lbl_update_duration_note = "A atualizacao pode demorar aproximadamente 35 segundos",
+    .btn_pulses              = "PULSOS",
+    .btn_meters              = "METROS",
 };
 
 /* ---- Runtime state ---- */
@@ -330,6 +406,66 @@ void lang_apply(void) {
             if (pw_lbl) lv_label_set_text(pw_lbl, L->lbl_enable_password);
         }
     }
+
+    /* Settings - Encoder nav button */
+    CLBL(objects.settings_btn_encoder, L->nav_encoder);
+
+    /* Settings - Encoder panel (child order: 0=title,1=desc,2=perimeter row,
+     * 3=presets,4=pulses/rev row,5=footer). El footer se recalcula del lado
+     * de main.c (formula con numeros), no aca. */
+    if (objects.settings_content_encoder) {
+        lv_obj_t *panel = objects.settings_content_encoder;
+        lv_obj_t *title = lv_obj_get_child(panel, 0);
+        if (title) lv_label_set_text(title, L->title_encoder);
+        lv_obj_t *desc = lv_obj_get_child(panel, 1);
+        if (desc) lv_label_set_text(desc, L->desc_encoder);
+        lv_obj_t *perim_row = lv_obj_get_child(panel, 2);
+        if (perim_row) {
+            lv_obj_t *key = lv_obj_get_child(perim_row, 0);
+            if (key) lv_label_set_text(key, L->lbl_perimeter);
+        }
+        lv_obj_t *ppr_row = lv_obj_get_child(panel, 4);
+        if (ppr_row) {
+            lv_obj_t *key = lv_obj_get_child(ppr_row, 0);
+            if (key) lv_label_set_text(key, L->lbl_pulses_rev);
+            lv_obj_t *unit = lv_obj_get_child(ppr_row, 2);
+            if (unit) lv_label_set_text(unit, L->unit_pulses_rev);
+        }
+    }
+
+    /* Settings - Technology nav button + panel (0=title, 1=desc, 2=fila
+     * botones A/B, 3=desc A, 4=desc B) */
+    CLBL(objects.settings_btn_tecnologia, L->nav_technology);
+    if (objects.settings_content_tecnologia) {
+        lv_obj_t *panel = objects.settings_content_tecnologia;
+        lv_obj_t *title = lv_obj_get_child(panel, 0);
+        if (title) lv_label_set_text(title, L->title_technology);
+        lv_obj_t *desc = lv_obj_get_child(panel, 1);
+        if (desc) lv_label_set_text(desc, L->desc_technology);
+    }
+    if (objects.tech_desc_a) lv_label_set_text(objects.tech_desc_a, L->desc_tech_a);
+    if (objects.tech_desc_b) lv_label_set_text(objects.tech_desc_b, L->desc_tech_b);
+
+    /* Sysinfo - Update nav button + panel (0=title,1=LED+status,2=button
+     * row,3=network info). El texto del boton WiFi y el estado dependen de
+     * estado que solo main.c conoce — ver hmi_extra_panels_apply_lang(). */
+    CLBL(objects.sysinfo_btn_update, L->nav_update);
+    if (objects.sysinfo_content_update) {
+        lv_obj_t *panel = objects.sysinfo_content_update;
+        lv_obj_t *title = lv_obj_get_child(panel, 0);
+        if (title) lv_label_set_text(title, L->title_update);
+        if (objects.update_network_label) {
+            char buf[48];
+            snprintf(buf, sizeof(buf), "%sWTP TALLER", L->lbl_network_prefix);
+            lv_label_set_text(objects.update_network_label, buf);
+        }
+    }
+    if (objects.update_duration_note) lv_label_set_text(objects.update_duration_note, L->lbl_update_duration_note);
+
+    /* Overlay "Actualizando..." de la descarga OTA (reusa lbl_updating) */
+    if (objects.ota_progress_label) lv_label_set_text(objects.ota_progress_label, L->lbl_updating);
+
+    hmi_extra_panels_apply_lang();
 }
 
 #undef LBL

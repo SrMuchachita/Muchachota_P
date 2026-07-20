@@ -1,4 +1,4 @@
-#include <string.h>
+﻿#include <string.h>
 
 #include "screens.h"
 #include "images.h"
@@ -1458,24 +1458,19 @@ void create_screen_main() {
 }
 
 // Todos los paneles de contenido que empiezan OCULTOS (LV_OBJ_FLAG_HIDDEN) en
-// Settings (Encoder/Theme/Battery/Language/User) y System Info (Update/
-// Version/Guide) se arman aca, aparte de create_screen_main(), para que la
-// interfaz base (con Brightness y Device visibles) aparezca rapido en el
-// arranque. Ninguno de estos paneles se ve hasta que el usuario toca su
-// boton de nav, asi que no hace falta tenerlos listos durante la ventana de
-// pantalla negra del boot. Se llama poco despues de create_screen_main(), ya
-// con el backlight encendido, desde app_main() en main.c. Los contenedores
-// padre se resuelven con lv_obj_get_parent() sobre botones/paneles que SI
-// siguen creandose en create_screen_main() (settings_btn_user,
+// Settings (Encoder/Tecnologia/Theme/Battery/Language/User) y System Info
+// (Update/Version/Guide) se arman aca, aparte de create_screen_main(), asi el
+// arbol grande de create_screen_main() queda mas chico y ordenado. Ninguno de
+// estos paneles se ve hasta que el usuario toca su boton de nav. Los
+// contenedores padre se resuelven con lv_obj_get_parent() sobre botones/
+// paneles que SI siguen creandose en create_screen_main() (settings_btn_user,
 // settings_content_brightness, sysinfo_btn_guide, sysinfo_content_device),
-// porque este codigo ya no esta anidado dentro de ese arbol.
-// Cada uno de estos 4 se llama desde main.c en su propio ciclo corto de
-// esp_lv_adapter_lock()/unlock() + vTaskDelay() real entre uno y otro (ver
-// app_main en main.c). Un solo lock de ~9s corridos sin ceder el CPU dispara
-// el watchdog de la tarea IDLE0 (confirmado por log) y evita que la tarea de
-// render de LVGL llegue a pintar/flushear ningun frame hasta que termina
-// todo — de ahi que intentos previos de diferir esta construccion en un solo
-// bloque (segundo lock, o timer de LVGL) se quedaran en pantalla negra.
+// porque este codigo ya no esta anidado dentro de ese arbol. Todas estas
+// funciones se llaman seguidas, de un tiron, desde ui_init() (ui.c) — ver la
+// memoria del proyecto (boot_deferred_construction): escalonarlas con locks o
+// timers separados (para que la interfaz base aparezca antes) se probo varias
+// veces y siempre termino en pantalla negra trabada, asi que no se debe
+// repetir sin antes conseguir un log real del cuelgue.
 void create_panel_settings_encoder() {
     // ---- Settings > Encoder ----
     {
@@ -1546,9 +1541,9 @@ void create_panel_settings_encoder() {
                     lv_obj_t *obj = lv_label_create(parent_obj);
                     lv_obj_set_size(obj, LV_PCT(100), LV_SIZE_CONTENT);
                     lv_obj_set_style_text_color(obj, lv_color_hex(0xffaaaaaa), LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_14, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
                     lv_label_set_long_mode(obj, LV_LABEL_LONG_WRAP);
-                    lv_label_set_text(obj, "Perimetro del rodillo del encoder. Formula: Dist.(m) = Pulsos x Perimetro / 1000  |  Default: 85.20 mm");
+                    lv_label_set_text(obj, "Encoder roller perimeter. Formula: Dist.(m) = Pulses x Perimeter / 1000  |  Default: 85.20 mm");
                 }
                 // Fila Perimetro
                 {
@@ -1571,7 +1566,7 @@ void create_panel_settings_encoder() {
                             lv_obj_set_size(obj, 130, LV_SIZE_CONTENT);
                             lv_obj_set_style_text_color(obj, lv_color_hex(0xffaaaaaa), LV_PART_MAIN | LV_STATE_DEFAULT);
                             lv_obj_set_style_text_font(obj, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
-                            lv_label_set_text(obj, "Perimetro:");
+                            lv_label_set_text(obj, "Perimeter:");
                         }
                         // Wrap: spinbox + flechas
                         {
@@ -1657,7 +1652,7 @@ void create_panel_settings_encoder() {
                         {
                             lv_obj_t *obj = lv_label_create(parent_obj);
                             lv_obj_set_style_text_color(obj, lv_color_hex(0xffaaaaaa), LV_PART_MAIN | LV_STATE_DEFAULT);
-                            lv_obj_set_style_text_font(obj, &lv_font_montserrat_14, LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_set_style_text_font(obj, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
                             lv_label_set_text(obj, "mm");
                         }
                     }
@@ -1690,7 +1685,7 @@ void create_panel_settings_encoder() {
                             {
                                 lv_obj_t *lbl = lv_label_create(obj);
                                 lv_obj_set_style_align(lbl, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                lv_obj_set_style_text_font(lbl, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
                                 lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
                                 lv_label_set_text(lbl, enc_preset_labels[enc_pi]);
                             }
@@ -1718,7 +1713,7 @@ void create_panel_settings_encoder() {
                             lv_obj_set_size(obj, 130, LV_SIZE_CONTENT);
                             lv_obj_set_style_text_color(obj, lv_color_hex(0xffaaaaaa), LV_PART_MAIN | LV_STATE_DEFAULT);
                             lv_obj_set_style_text_font(obj, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
-                            lv_label_set_text(obj, "Pulsos/vuelta:");
+                            lv_label_set_text(obj, "Pulses/rev:");
                         }
                         // Wrap: spinbox + flechas
                         {
@@ -1804,8 +1799,8 @@ void create_panel_settings_encoder() {
                         {
                             lv_obj_t *obj = lv_label_create(parent_obj);
                             lv_obj_set_style_text_color(obj, lv_color_hex(0xffaaaaaa), LV_PART_MAIN | LV_STATE_DEFAULT);
-                            lv_obj_set_style_text_font(obj, &lv_font_montserrat_14, LV_PART_MAIN | LV_STATE_DEFAULT);
-                            lv_label_set_text(obj, "pulsos/vuelta");
+                            lv_obj_set_style_text_font(obj, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_label_set_text(obj, "pulses/rev");
                         }
                     }
                 }
@@ -1815,7 +1810,7 @@ void create_panel_settings_encoder() {
                     objects.enc_footer_label = obj;
                     lv_obj_set_size(obj, LV_PCT(100), LV_SIZE_CONTENT);
                     lv_obj_set_style_text_color(obj, lv_color_hex(0xffaaaaaa), LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_12, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
                     lv_obj_set_style_flex_cross_place(obj, LV_FLEX_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
                     lv_label_set_long_mode(obj, LV_LABEL_LONG_WRAP);
                     lv_label_set_text(obj, "");
@@ -1916,38 +1911,91 @@ void create_panel_sysinfo_update() {
                             objects.update_status_label = obj;
                             lv_obj_set_style_text_color(obj, lv_color_hex(0xffffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
                             lv_obj_set_style_text_font(obj, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
-                            lv_label_set_text(obj, "WiFi apagado");
+                            lv_label_set_text(obj, "WiFi off");
                         }
                     }
                 }
-                // Boton toggle
+                // Fila de botones: Activar WiFi + Actualizar (este ultimo
+                // arranca oculto; se muestra y se pone amarillo cuando
+                // ota_http detecta una version nueva — ver
+                // ota_update_available_cb() en main.c).
                 {
-                    lv_obj_t *obj = lv_button_create(parent_obj);
-                    objects.update_toggle_btn = obj;
-                    lv_obj_set_size(obj, 220, 50);
-                    lv_obj_set_style_radius(obj, 8, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_obj_set_style_shadow_opa(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_obj_set_style_bg_color(obj, lv_color_hex(0xff2a2a2a), LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_obj_set_style_border_color(obj, lv_color_hex(0xff3c3c3c), LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_obj_set_style_border_opa(obj, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_obj_set_style_border_width(obj, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_obj_add_event_cb(obj, update_wifi_toggle_cb, LV_EVENT_CLICKED, NULL);
+                    lv_obj_t *obj = lv_obj_create(parent_obj);
+                    lv_obj_set_size(obj, LV_PCT(100), LV_SIZE_CONTENT);
+                    lv_obj_set_style_bg_opa(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_border_width(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_pad_all(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_layout(obj, LV_LAYOUT_FLEX, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_flex_flow(obj, LV_FLEX_FLOW_ROW, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_flex_cross_place(obj, LV_FLEX_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_pad_column(obj, 12, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_remove_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
                     {
-                        lv_obj_t *lbl = lv_label_create(obj);
-                        lv_obj_set_style_align(lbl, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
-                        lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
-                        lv_label_set_text(lbl, "Activar WiFi");
+                        lv_obj_t *parent_obj = obj;
+                        // Boton toggle WiFi
+                        {
+                            lv_obj_t *obj = lv_button_create(parent_obj);
+                            objects.update_toggle_btn = obj;
+                            lv_obj_set_size(obj, 220, 50);
+                            lv_obj_set_style_radius(obj, 8, LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_set_style_shadow_opa(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_set_style_bg_color(obj, lv_color_hex(0xff2a2a2a), LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_set_style_border_color(obj, lv_color_hex(0xff3c3c3c), LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_set_style_border_opa(obj, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_set_style_border_width(obj, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_add_event_cb(obj, update_wifi_toggle_cb, LV_EVENT_CLICKED, NULL);
+                            {
+                                lv_obj_t *lbl = lv_label_create(obj);
+                                lv_obj_set_style_align(lbl, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                lv_obj_set_style_text_font(lbl, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
+                                lv_label_set_text(lbl, "Enable WiFi");
+                            }
+                        }
+                        // Boton "hay actualizacion" (oculto hasta que se detecte una)
+                        {
+                            lv_obj_t *obj = lv_button_create(parent_obj);
+                            objects.update_available_btn = obj;
+                            lv_obj_set_size(obj, 220, 50);
+                            lv_obj_set_style_radius(obj, 8, LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_set_style_shadow_opa(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_set_style_bg_color(obj, lv_color_hex(0xff2a2a2a), LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_set_style_border_color(obj, lv_color_hex(0xff3c3c3c), LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_set_style_border_opa(obj, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_set_style_border_width(obj, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
+                            lv_obj_add_event_cb(obj, update_confirm_cb, LV_EVENT_CLICKED, NULL);
+                            {
+                                lv_obj_t *lbl = lv_label_create(obj);
+                                lv_obj_set_style_align(lbl, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                lv_obj_set_style_text_font(lbl, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
+                                lv_label_set_text(lbl, "Update");
+                            }
+                        }
                     }
                 }
-                // Info de red
+                // Info de red — oculta hasta que el WiFi este realmente
+                // conectado (ver update_network_label_set_visible en main.c)
                 {
                     lv_obj_t *obj = lv_label_create(parent_obj);
+                    objects.update_network_label = obj;
                     lv_obj_set_size(obj, LV_PCT(100), LV_SIZE_CONTENT);
                     lv_obj_set_style_text_color(obj, lv_color_hex(0xffaaaaaa), LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_14, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
                     lv_label_set_long_mode(obj, LV_LABEL_LONG_WRAP);
-                    lv_label_set_text(obj, "Red: WTP TALLER");
+                    lv_label_set_text(obj, "Network: WTP TALLER");
+                    lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
+                }
+                // Aviso de duracion aproximada de la actualizacion
+                {
+                    lv_obj_t *obj = lv_label_create(parent_obj);
+                    objects.update_duration_note = obj;
+                    lv_obj_set_size(obj, LV_PCT(100), LV_SIZE_CONTENT);
+                    lv_obj_set_style_text_color(obj, lv_color_hex(0xffaaaaaa), LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_label_set_long_mode(obj, LV_LABEL_LONG_WRAP);
+                    lv_label_set_text(obj, "The update may take approximately 35 seconds");
                 }
             }
         }
@@ -2320,7 +2368,7 @@ void create_panel_settings_theme_battery_lang_user() {
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_text_color(obj, lv_color_hex(0xffaaaaaa), LV_PART_MAIN | LV_STATE_DEFAULT);
                             lv_obj_set_style_text_font(obj, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
-                            lv_label_set_text(obj, "Nombre :");
+                            lv_label_set_text(obj, "Name :");
                         }
                         // device name value
                         {
@@ -2364,7 +2412,7 @@ void create_panel_settings_theme_battery_lang_user() {
                                 lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
                                 lv_obj_set_style_text_font(lbl, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
                                 lv_obj_set_style_align(lbl, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                lv_label_set_text(lbl, "Cambiar Nombre");
+                                lv_label_set_text(lbl, "Change Name");
                             }
                         }
                         // Cambiar PIN
@@ -2383,7 +2431,7 @@ void create_panel_settings_theme_battery_lang_user() {
                                 lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
                                 lv_obj_set_style_text_font(lbl, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
                                 lv_obj_set_style_align(lbl, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                lv_label_set_text(lbl, "Cambiar PIN");
+                                lv_label_set_text(lbl, "Change PIN");
                             }
                         }
                     }
@@ -2410,7 +2458,7 @@ void create_panel_settings_theme_battery_lang_user() {
                             lv_obj_set_flex_grow(obj, 1);
                             lv_obj_set_style_text_color(obj, lv_color_hex(0xffaaaaaa), LV_PART_MAIN | LV_STATE_DEFAULT);
                             lv_obj_set_style_text_font(obj, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
-                            lv_label_set_text(obj, "Habilitar contrasena");
+                            lv_label_set_text(obj, "Enable Password");
                         }
                         {
                             lv_obj_t *obj = lv_switch_create(parent_obj);
@@ -2520,6 +2568,189 @@ void create_panel_sysinfo_version_guide() {
                 }
             }
         }
+    }
+}
+
+void create_panel_settings_tecnologia() {
+    // ---- Settings > Tecnologia ----
+    {
+        lv_obj_t *parent_obj = lv_obj_get_parent(objects.settings_btn_user);
+        // Tecnologia button (inactive)
+        {
+            lv_obj_t *obj = lv_btn_create(parent_obj);
+            objects.settings_btn_tecnologia = obj;
+            lv_obj_set_size(obj, LV_PCT(100), 60);
+            lv_obj_set_style_bg_color(obj, lv_color_hex(0xff2a2a2a), LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_border_color(obj, lv_color_hex(0xff3c3c3c), LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_border_opa(obj, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_border_width(obj, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_radius(obj, 8, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_shadow_opa(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_add_event_cb(obj, action_settings_btn_tecnologia, LV_EVENT_CLICKED, (void *)0);
+            {
+                lv_obj_t *lbl = lv_label_create(obj);
+                lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
+                lv_obj_set_style_text_font(lbl, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
+                lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+                lv_obj_set_style_align(lbl, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+                lv_label_set_text(lbl, "Technology");
+            }
+        }
+    }
+    {
+        lv_obj_t *parent_obj = lv_obj_get_parent(objects.settings_content_brightness);
+        // Tecnologia panel (hidden by default)
+        {
+            lv_obj_t *obj = lv_obj_create(parent_obj);
+            objects.settings_content_tecnologia = obj;
+            lv_obj_set_pos(obj, 0, 0);
+            lv_obj_set_size(obj, LV_PCT(100), LV_PCT(100));
+            lv_obj_set_style_bg_opa(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_border_width(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_pad_all(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_radius(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_layout(obj, LV_LAYOUT_FLEX, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_flex_flow(obj, LV_FLEX_FLOW_COLUMN, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_flex_main_place(obj, LV_FLEX_ALIGN_START, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_pad_row(obj, 14, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_remove_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
+            {
+                lv_obj_t *parent_obj = obj;
+                // Titulo
+                {
+                    lv_obj_t *obj = lv_label_create(parent_obj);
+                    lv_obj_set_size(obj, LV_PCT(100), LV_SIZE_CONTENT);
+                    lv_obj_set_style_text_color(obj, lv_color_hex(0xfff5c518), LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_20, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_border_side(obj, LV_BORDER_SIDE_LEFT, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_border_width(obj, 4, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_border_color(obj, lv_color_hex(0xfff5c518), LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_border_opa(obj, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_pad_left(obj, 8, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_label_set_text(obj, " TECHNOLOGY");
+                }
+                // Subtitulo / descripcion
+                {
+                    lv_obj_t *obj = lv_label_create(parent_obj);
+                    lv_obj_set_size(obj, LV_PCT(100), LV_SIZE_CONTENT);
+                    lv_obj_set_style_text_color(obj, lv_color_hex(0xffaaaaaa), LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_label_set_long_mode(obj, LV_LABEL_LONG_WRAP);
+                    lv_label_set_text(obj, "Video technology");
+                }
+                // Fila de botones A/B: mientras se mantienen presionados envian 1
+                // por el serial HMI (la placa de consola prende su LED
+                // correspondiente), y al soltarlos envian 0.
+                {
+                    lv_obj_t *obj = lv_obj_create(parent_obj);
+                    lv_obj_set_size(obj, LV_PCT(100), LV_SIZE_CONTENT);
+                    lv_obj_set_style_bg_opa(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_border_width(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_pad_all(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_layout(obj, LV_LAYOUT_FLEX, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_flex_flow(obj, LV_FLEX_FLOW_ROW, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_pad_column(obj, 12, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_remove_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
+                    {
+                        lv_obj_t *parent_obj = obj;
+                        // Boton A — el color de PRESSED lo aplica theme_technology_panel()
+                        // en actions.c segun el tema activo (Dark/Classic/Light), no un
+                        // amarillo fijo.
+                        {
+                            lv_obj_t *obj = lv_button_create(parent_obj);
+                            objects.tech_btn_a = obj;
+                            lv_obj_set_size(obj, 220, 50);
+                            lv_obj_set_style_radius(obj, 8, LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_set_style_shadow_opa(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_set_style_bg_color(obj, lv_color_hex(0xff2a2a2a), LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_set_style_border_color(obj, lv_color_hex(0xff3c3c3c), LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_set_style_border_opa(obj, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_set_style_border_width(obj, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_add_event_cb(obj, action_settings_video_tech_press, LV_EVENT_PRESSED, (void *)0);
+                            lv_obj_add_event_cb(obj, action_settings_video_tech_release, LV_EVENT_RELEASED, (void *)0);
+                            lv_obj_add_event_cb(obj, action_settings_video_tech_release, LV_EVENT_PRESS_LOST, (void *)0);
+                            {
+                                lv_obj_t *lbl = lv_label_create(obj);
+                                lv_obj_set_style_align(lbl, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                lv_obj_set_style_text_font(lbl, &lv_font_montserrat_32, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
+                                lv_label_set_text(lbl, "A");
+                            }
+                        }
+                        // Boton B — idem
+                        {
+                            lv_obj_t *obj = lv_button_create(parent_obj);
+                            objects.tech_btn_b = obj;
+                            lv_obj_set_size(obj, 220, 50);
+                            lv_obj_set_style_radius(obj, 8, LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_set_style_shadow_opa(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_set_style_bg_color(obj, lv_color_hex(0xff2a2a2a), LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_set_style_border_color(obj, lv_color_hex(0xff3c3c3c), LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_set_style_border_opa(obj, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_set_style_border_width(obj, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_add_event_cb(obj, action_settings_video_tech_b_press, LV_EVENT_PRESSED, (void *)0);
+                            lv_obj_add_event_cb(obj, action_settings_video_tech_b_release, LV_EVENT_RELEASED, (void *)0);
+                            lv_obj_add_event_cb(obj, action_settings_video_tech_b_release, LV_EVENT_PRESS_LOST, (void *)0);
+                            {
+                                lv_obj_t *lbl = lv_label_create(obj);
+                                lv_obj_set_style_align(lbl, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                lv_obj_set_style_text_font(lbl, &lv_font_montserrat_32, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
+                                lv_label_set_text(lbl, "B");
+                            }
+                        }
+                    }
+                }
+                // Descripcion boton A
+                {
+                    lv_obj_t *obj = lv_label_create(parent_obj);
+                    objects.tech_desc_a = obj;
+                    lv_obj_set_size(obj, LV_PCT(100), LV_SIZE_CONTENT);
+                    lv_obj_set_style_text_color(obj, lv_color_hex(0xffaaaaaa), LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_label_set_long_mode(obj, LV_LABEL_LONG_WRAP);
+                    lv_label_set_text(obj, "A: Output signal change");
+                }
+                // Descripcion boton B
+                {
+                    lv_obj_t *obj = lv_label_create(parent_obj);
+                    objects.tech_desc_b = obj;
+                    lv_obj_set_size(obj, LV_PCT(100), LV_SIZE_CONTENT);
+                    lv_obj_set_style_text_color(obj, lv_color_hex(0xffaaaaaa), LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_label_set_long_mode(obj, LV_LABEL_LONG_WRAP);
+                    lv_label_set_text(obj, "B: Output signal resolution or TV mode change");
+                }
+            }
+        }
+    }
+}
+
+// Overlay pantalla completa, oculto por defecto: se muestra durante la
+// descarga OTA (backlight prendido, texto fijo, sin numeros que cambien)
+// para dar feedback visual sin reintroducir el parpadeo por redibujados
+// dinamicos. Se crea como ultimo hijo de objects.main para quedar siempre
+// por encima del resto de la UI cuando se muestra.
+void create_ota_progress_overlay() {
+    lv_obj_t *obj = lv_obj_create(objects.main);
+    objects.ota_progress_overlay = obj;
+    lv_obj_set_pos(obj, 0, 0);
+    lv_obj_set_size(obj, 800, 480);
+    lv_obj_set_style_bg_color(obj, lv_color_hex(0xff000000), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_opa(obj, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_width(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_radius(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_remove_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
+    {
+        // Splash del arranque (welltepp, 800x480) en vez del isotipo chico:
+        // el isotipo (40x24) se ve borroso al agrandarlo porque no hay mas
+        // detalle real que estirar. welltepp ya es del tamaño de pantalla,
+        // sin escalar, asi que sale nitido.
+        lv_obj_t *iso = lv_img_create(obj);
+        lv_img_set_src(iso, &welltepp);
+        lv_obj_center(iso);
     }
 }
 

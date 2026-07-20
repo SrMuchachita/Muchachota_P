@@ -76,6 +76,35 @@ typedef struct {
     const char *title_dev_mode;
     const char *sub_change_pin;
     const char *sub_enter_pin;
+    /* Settings - Encoder panel */
+    const char *nav_encoder;
+    const char *title_encoder;
+    const char *desc_encoder;
+    const char *lbl_perimeter;
+    const char *lbl_pulses_rev;
+    const char *unit_pulses_rev;
+    const char *fmt_encoder_footer; /* placeholders: %.3f mm-per-pulse, %.1f pulses-per-m, %.2f perim-mm, %ld ppr */
+    /* Settings - Technology panel */
+    const char *nav_technology;
+    const char *title_technology;
+    const char *desc_technology;
+    const char *desc_tech_a;
+    const char *desc_tech_b;
+    /* Sysinfo - Update panel */
+    const char *nav_update;
+    const char *title_update;
+    const char *lbl_wifi_off;
+    const char *lbl_connecting;
+    const char *lbl_reconnecting;
+    const char *lbl_connected_prefix;
+    const char *btn_enable_wifi;
+    const char *btn_disable_wifi;
+    const char *lbl_updating;
+    const char *lbl_network_prefix;
+    const char *lbl_update_duration_note;
+    /* General Controls - Encoder card pulses/meters toggle */
+    const char *btn_pulses;
+    const char *btn_meters;
 } lang_strings_t;
 
 typedef enum {
@@ -90,3 +119,9 @@ extern const lang_strings_t *g_lang;
 void      lang_set(lang_id_t id);
 lang_id_t lang_get(void);
 void      lang_apply(void);
+
+// Definido en main.c: refresca textos que dependen de estado que solo main.c
+// conoce (boton/estado de WiFi en el panel Update, toggle Pulsos/Metros del
+// dashboard, formula del footer de Encoder) cuando cambia el idioma.
+// Llamado al final de lang_apply().
+void hmi_extra_panels_apply_lang(void);

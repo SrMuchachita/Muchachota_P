@@ -23,18 +23,22 @@ typedef enum
     HMI_REG_BLUETOOTH_PASSWORD  = 0x0D, // Password BLE
     HMI_REG_ROBOT_SERIAL        = 0x0E, // Numero de serie del robot
     HMI_REG_CENTER              = 0x0F, // Centrado: bits[31:16]=cuello, bits[15:0]=cabeza
-    // 0x10, 0x11 reservados
+    // 0x10 = SRV1_LIMITS (usado del lado de la placa de consola, no en el HMI)
+    // 0x11 = SRV2_LIMITS (usado del lado de la placa de consola, no en el HMI)
     HMI_REG_JOY1                = 0x12, // Joystick 1: bits[31:16]=x, bits[15:0]=y
     HMI_REG_JOY2                = 0x13, // Joystick 2: bits[31:16]=x, bits[15:0]=y
     HMI_REG_BUTTONS             = 0x14, // Botones: bit1=J1, bit0=J2
     HMI_REG_PING                = 0x15, // HMI -> Consola: ping (value=1)
     HMI_REG_PONG                = 0x16, // Consola -> HMI: respuesta al ping (value=1)
     HMI_REG_P1                  = 0x17, // Joystick P1: un solo eje (0-4095), cada 200ms
-    // 0x18, 0x19 reservados
+    // 0x18 = CENTER_SRV3 (usado del lado de la placa de consola, no en el HMI)
+    // 0x19 = SRV3_LIMITS (usado del lado de la placa de consola, no en el HMI)
     HMI_REG_MOTOR               = 0x1A, // Motor: bits[31:16]=cmd, bits[15:0]=vel (0-1000)
     HMI_REG_SRV1_ANGLE          = 0x1B, // Angulo servo1 cabeza (0-180°)
     HMI_REG_SRV2_ANGLE          = 0x1C, // Angulo servo2 cuello (0-180°)
     HMI_REG_SRV3_ANGLE          = 0x1D, // Angulo servo3 (0-270°)
+    HMI_REG_VIDEO_TECH          = 0x21, // Tecnologia de video, boton A: 1 = prender LED en la placa de consola, 0 = apagar
+    HMI_REG_VIDEO_TECH_B        = 0x22, // Tecnologia de video, boton B: 1 = prender LED en la placa de consola, 0 = apagar
     HMI_CMD_MAX
 } hmi_reg_t;
 
@@ -72,6 +76,7 @@ void enc_sb_increment_cb(lv_event_t *e);
 void enc_sb_decrement_cb(lv_event_t *e);
 void enc_preset_cb(lv_event_t *e);
 void update_wifi_toggle_cb(lv_event_t *e);
+void update_confirm_cb(lv_event_t *e);
 
 // Carga la calibracion del encoder desde NVS en los spinboxes de
 // Settings>Encoder. Debe llamarse despues de que esos spinboxes existan (ver

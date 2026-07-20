@@ -93,6 +93,9 @@ typedef struct _objects_t {
     lv_obj_t *update_led;
     lv_obj_t *update_status_label;
     lv_obj_t *update_toggle_btn;
+    lv_obj_t *update_available_btn;
+    lv_obj_t *update_duration_note;
+    lv_obj_t *update_network_label;
     lv_obj_t *sysinfo_robot_serial_value;
     lv_obj_t *sysinfo_console_serial_value;
     lv_obj_t *sysinfo_device_name_value;
@@ -121,6 +124,14 @@ typedef struct _objects_t {
     lv_obj_t *enc_spinbox_perim;
     lv_obj_t *enc_spinbox_ppr;
     lv_obj_t *enc_footer_label;
+    lv_obj_t *settings_btn_tecnologia;
+    lv_obj_t *settings_content_tecnologia;
+    lv_obj_t *tech_btn_a;
+    lv_obj_t *tech_btn_b;
+    lv_obj_t *tech_desc_a;
+    lv_obj_t *tech_desc_b;
+    lv_obj_t *ota_progress_overlay;
+    lv_obj_t *ota_progress_label;
 } objects_t;
 
 extern objects_t objects;
@@ -132,15 +143,19 @@ void tick_screen_by_id(enum ScreensEnum screenId);
 void tick_screen(int screen_index);
 
 void create_screens();
-// Paneles ocultos por defecto (Encoder/Update/Theme/Battery/Language/User/
-// Version/Guide): se llaman en 4 pasos separados desde app_main (main.c),
-// cada uno en su propio ciclo corto de esp_lv_adapter_lock()/unlock() +
-// vTaskDelay() real entre uno y otro, para no bloquear la tarea de render de
-// LVGL (ni disparar el watchdog de IDLE0) con un solo bloque de ~9s.
+// Paneles ocultos por defecto (ninguno se ve hasta tocar su boton de nav):
+// se llaman todos seguidos, de un tiron, desde ui_init() (ui.c) — la unica
+// arquitectura de arranque confirmada estable (ver boot_deferred_construction
+// en la memoria del proyecto: cualquier intento de escalonarlos con locks o
+// timers separados termino en pantalla negra trabada).
 void create_panel_settings_encoder();
 void create_panel_sysinfo_update();
 void create_panel_settings_theme_battery_lang_user();
 void create_panel_sysinfo_version_guide();
+void create_panel_settings_tecnologia();
+// Overlay pantalla completa "Actualizando..." mostrado durante la descarga
+// OTA (ver ota_before_download_cb en main.c). Oculto por defecto.
+void create_ota_progress_overlay();
 
 #ifdef __cplusplus
 }

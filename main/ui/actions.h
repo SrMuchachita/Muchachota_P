@@ -48,6 +48,11 @@ extern void action_settings_change_lock_pin(lv_event_t *e);
 extern void action_settings_toggle_lock_pin(lv_event_t *e);
 extern void action_settings_btn_encoder(lv_event_t *e);
 extern void action_sysinfo_btn_update(lv_event_t *e);
+extern void action_settings_btn_tecnologia(lv_event_t *e);
+extern void action_settings_video_tech_press(lv_event_t *e);
+extern void action_settings_video_tech_release(lv_event_t *e);
+extern void action_settings_video_tech_b_press(lv_event_t *e);
+extern void action_settings_video_tech_b_release(lv_event_t *e);
 
 /* Override en main.c: reaplica el color activo/inactivo del boton toggle de
  * WiFi (y el color del label de estado) cuando cambia el tema. */
