@@ -1098,6 +1098,16 @@ static void rx_disp_log_frame(uint8_t reg, int32_t value)
     case HMI_REG_SRV3_ANGLE:
         snprintf(meaning, sizeof(meaning), "SRV3_ANGLE=%d°", (int)value);
         break;
+    case HMI_REG_OTA_STATUS:
+        snprintf(meaning, sizeof(meaning), "OTA_STATUS=%ld", (long)value);
+        break;
+    case HMI_REG_FW_VERSION:
+        snprintf(meaning, sizeof(meaning), "FW_VER=%u.%u.%u",
+                 (unsigned)((value >> 16) & 0xFF), (unsigned)((value >> 8) & 0xFF), (unsigned)(value & 0xFF));
+        break;
+    case HMI_REG_WIFI_STATUS:
+        snprintf(meaning, sizeof(meaning), "CONSOLE_WIFI=%ld", (long)value);
+        break;
     default:
         snprintf(meaning, sizeof(meaning), "REG:%02X ?", reg);
         break;
@@ -1127,7 +1137,713 @@ static void rx_disp_log_frame(uint8_t reg, int32_t value)
 #define DEV_NAME_MAX       32
 #define NVS_KEY_ENC_PERIM_CX100 "enc_perim"   // perimetro del rodillo, centesimas de mm
 #define NVS_KEY_ENC_PPR         "enc_ppr"     // pulsos por vuelta del encoder
-#define NVS_KEY_ENC_MODE_METERS "enc_mode_m"  // 0=Pulsos, 1=Metros (toggle de GENERAL CONTROLS)
+
+//*************************************************************************************
+// GIRO AUTOMATICO PERSONALIZADO — "Control por Puntos" / "Config Auto Rotation"
+//*************************************************************************************
+#define RECORRIDO_MAX_POINTS 10
+#define RECORRIDO_COUNT      2
+#define NVS_KEY_RECORRIDO1   "auto_rec1"
+#define NVS_KEY_RECORRIDO2   "auto_rec2"
+#define NVS_KEY_SRV_LIMITS   "srv_limits"
+
+typedef struct {
+    int16_t head;
+    int16_t neck;
+} recorrido_point_t;
+
+typedef struct {
+    uint8_t            count;                        // puntos guardados (0-RECORRIDO_MAX_POINTS)
+    uint8_t            speed;                         // 1-5, valido solo durante reproduccion
+    recorrido_point_t  points[RECORRIDO_MAX_POINTS];
+} recorrido_t;
+
+typedef struct {
+    int16_t min;
+    int16_t max;
+} servo_limit_t;
+
+typedef struct {
+    servo_limit_t srv1, srv2, srv3;
+} servo_limits_t;
+
+static void recorrido_nvs_read(uint8_t idx, recorrido_t *out)
+{
+    memset(out, 0, sizeof(*out));
+    out->speed = 3;
+    nvs_handle_t h;
+    const char *key = (idx == 0) ? NVS_KEY_RECORRIDO1 : NVS_KEY_RECORRIDO2;
+    if (nvs_open(NVS_DEV_NS, NVS_READONLY, &h) == ESP_OK) {
+        size_t sz = sizeof(*out);
+        nvs_get_blob(h, key, out, &sz);
+        nvs_close(h);
+    }
+    if (out->count > RECORRIDO_MAX_POINTS) out->count = RECORRIDO_MAX_POINTS;
+    if (out->speed < 1 || out->speed > 5) out->speed = 3;
+}
+
+static void recorrido_nvs_write(uint8_t idx, const recorrido_t *in)
+{
+    nvs_handle_t h;
+    const char *key = (idx == 0) ? NVS_KEY_RECORRIDO1 : NVS_KEY_RECORRIDO2;
+    if (nvs_open(NVS_DEV_NS, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_blob(h, key, in, sizeof(*in));
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}
+
+static void srv_limits_nvs_read(servo_limits_t *out)
+{
+    out->srv1.min = out->srv2.min = out->srv3.min = 0;
+    out->srv1.max = out->srv2.max = out->srv3.max = 270;
+    nvs_handle_t h;
+    if (nvs_open(NVS_DEV_NS, NVS_READONLY, &h) == ESP_OK) {
+        size_t sz = sizeof(*out);
+        nvs_get_blob(h, NVS_KEY_SRV_LIMITS, out, &sz);
+        nvs_close(h);
+    }
+}
+
+static void srv_limits_nvs_write(const servo_limits_t *in)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_DEV_NS, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_blob(h, NVS_KEY_SRV_LIMITS, in, sizeof(*in));
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}
+// ================================================================
+// Giro Automatico personalizado — estado en RAM + motor de reproduccion.
+// Los +/- de cabeza/cuello de estas 2 pantallas nuevas (a diferencia de los
+// originales de MODES, que solo mandan el registro cuando se toca el label)
+// mandan HMI_REG_ANGLE_*_CHANGED en cada toque: el objetivo aca es ver al
+// robot moverse en vivo mientras se posiciona un centro/punto a grabar.
+// ================================================================
+#define NVS_KEY_CENTER_HEAD "auto_c_head"
+#define NVS_KEY_CENTER_NECK "auto_c_neck"
+
+// Forward declarations — dev_nvs_read_pin/dev_nvs_write_pin se definen mas
+// abajo, en la seccion DEV_MODE, pero ya existian antes de este bloque.
+static int  dev_nvs_read_pin(const char *key, int def);
+static void dev_nvs_write_pin(const char *key, int val);
+
+static recorrido_t     g_recorridos[RECORRIDO_COUNT];
+static servo_limits_t  g_srv_limits;
+static int32_t         g_center_head = 90, g_center_neck = 90;
+static uint8_t         g_editing_recorrido = 0;
+static int             g_editor_selected_point = -1; // -1 = el proximo "Guardar punto" agrega nuevo
+static int             g_selected_recorrido = -1;    // -1 = ninguno elegido para Iniciar Giro Automatico
+static int             g_ar_playing_point_idx = -1;  // indice del punto que el Test esta ejecutando ahora (-1 = ninguno)
+
+typedef enum {
+    MODES_VIEW_HOME = 0,
+    MODES_VIEW_CONTROL_PUNTOS,
+    MODES_VIEW_AUTOROT_PICKER,
+    MODES_VIEW_AUTOROT_EDITOR,
+} modes_view_t;
+
+typedef enum {
+    AUTO_PLAY_IDLE = 0,
+    AUTO_PLAY_ONE_SHOT_MOVE,   // movimiento simple (ej. al entrar a una pantalla, o probar un punto)
+    AUTO_PLAY_MOVING_TO_START,
+    AUTO_PLAY_PLAYING,
+    AUTO_PLAY_PAUSED,
+    AUTO_PLAY_RETURNING_CENTER,
+} auto_play_state_t;
+
+static auto_play_state_t g_play_state      = AUTO_PLAY_IDLE;
+static auto_play_state_t g_pre_pause_state = AUTO_PLAY_IDLE;
+static uint8_t   g_play_recorrido_idx = 0;
+static uint8_t   g_play_point_idx     = 0;
+static int32_t   g_move_target_head = 90, g_move_target_neck = 90;
+static int32_t   g_move_step_deg    = 2;
+static lv_timer_t *g_auto_rotation_timer = NULL;
+
+static void auto_rotation_editor_refresh_list(void);
+static void auto_rotation_editor_refresh_row_colors(void);
+static void ar_test_set_running(bool running);
+
+// Muestra exactamente una de las 4 "vistas" de MODES: la grilla+paneles de
+// angulo originales (home), o una de las 3 pantallas completas nuevas.
+static void modes_show_view(modes_view_t view)
+{
+    // Los paneles de angulo cabeza/cuello YA NO viven en "home": screens.c
+    // los reubico dentro de modes_control_puntos_panel, asi que ocultarse/
+    // mostrarse con ese panel les llega automatico (LVGL oculta subarboles
+    // enteros). Home ahora es solo la grilla de 6 botones.
+    if (objects.modes_grid_panel) {
+        if (view == MODES_VIEW_HOME) lv_obj_remove_flag(objects.modes_grid_panel, LV_OBJ_FLAG_HIDDEN);
+        else                          lv_obj_add_flag(objects.modes_grid_panel, LV_OBJ_FLAG_HIDDEN);
+    }
+    lv_obj_t *sub_objs[3] = { objects.modes_control_puntos_panel, objects.modes_autorot_picker_panel, objects.modes_autorot_editor_panel };
+    for (int i = 0; i < 3; i++) {
+        if (!sub_objs[i]) continue;
+        bool show = (view == (modes_view_t)(i + 1));
+        if (show) lv_obj_remove_flag(sub_objs[i], LV_OBJ_FLAG_HIDDEN);
+        else      lv_obj_add_flag(sub_objs[i], LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+// Refleja cabeza/cuello en los 2 lugares que pueden mostrarlo (Control por
+// Puntos vive en objects.angle_head_label/angle_neck_label, reubicados ahi;
+// el editor de puntos tiene su propia copia ar_angle_*_label) — a lo sumo
+// uno esta visible, pero es mas simple mantener ambos sincronizados que
+// averiguar cual esta activo.
+static void auto_rotation_sync_labels(int32_t head, int32_t neck)
+{
+    char buff[10];
+    lv_snprintf(buff, sizeof(buff), "%03d", (int)head);
+    if (objects.angle_head_label) lv_label_set_text(objects.angle_head_label, buff);
+    lv_snprintf(buff, sizeof(buff), "%03d", (int)neck);
+    if (objects.angle_neck_label) lv_label_set_text(objects.angle_neck_label, buff);
+
+    // Las tarjetas del editor muestran el grado con el simbolo "°" (mockup
+    // del usuario) — buffer separado para no afectar el display de
+    // Control por Puntos/home, que sigue sin simbolo.
+    char buff_deg[12];
+    lv_snprintf(buff_deg, sizeof(buff_deg), "%03d\xC2\xB0", (int)head);
+    if (objects.ar_angle_head_label) lv_label_set_text(objects.ar_angle_head_label, buff_deg);
+    lv_snprintf(buff_deg, sizeof(buff_deg), "%03d\xC2\xB0", (int)neck);
+    if (objects.ar_angle_neck_label) lv_label_set_text(objects.ar_angle_neck_label, buff_deg);
+}
+
+// Cambia el texto del boton "Iniciar Giro Automatico"/"Pausar"/"Reanudar" Y
+// su resaltado visual (amarillo/accent mientras hay una reproduccion en
+// curso — moviendo, reproduciendo o pausada; color neutro en idle). Antes
+// solo cambiaba el texto, y sin el resaltado no habia forma de ver a simple
+// vista que el giro automatico estaba corriendo.
+static void modes_giro_automatico_set_state(const char *txt, bool active)
+{
+    if (objects.obj23) lv_label_set_text(objects.obj23, txt);
+    hmi_style_btn(objects.btn_giro_automatico, active);
+}
+
+// Reaplica el resaltado activo/inactivo tras un cambio de tema (SET_CARD lo
+// pisaria con el color neutro). Override fuerte del weak-hook de actions.c.
+void hmi_modes_giro_retheme(void)
+{
+    bool active = (g_play_state == AUTO_PLAY_MOVING_TO_START ||
+                   g_play_state == AUTO_PLAY_PLAYING ||
+                   g_play_state == AUTO_PLAY_PAUSED);
+    hmi_style_btn(objects.btn_giro_automatico, active);
+}
+
+// Usada solo por los callbacks ar_angle_*_dec/inc_cb del editor de puntos
+// (Control por Puntos/home reusan los botones ORIGINALES con sus propios
+// callbacks action_angle_*_btn_* en actions.c) — por eso el simbolo "°" fijo
+// en el label aca no afecta a esas otras pantallas.
+static void angle_axis_bump(lv_obj_t *label, bool is_head, int32_t delta)
+{
+    servo_limit_t lim = is_head ? g_srv_limits.srv1 : g_srv_limits.srv2;
+    int32_t value = is_head ? get_var_angle_head_value() : get_var_angle_neck_value();
+    value += delta;
+    if (value < lim.min) value = lim.min;
+    if (value > lim.max) value = lim.max;
+    if (is_head) set_var_angle_head_value(value); else set_var_angle_neck_value(value);
+    if (label) {
+        char buff[12];
+        lv_snprintf(buff, sizeof(buff), "%03d\xC2\xB0", (int)value);
+        lv_label_set_text(label, buff);
+    }
+    hmi_send_data(is_head ? HMI_REG_ANGLE_HEAD_CHANGED : HMI_REG_ANGLE_NECK_CHANGED, value);
+}
+
+static void auto_rotation_queue_next_point(void)
+{
+    recorrido_t *r = &g_recorridos[g_play_recorrido_idx];
+    uint8_t next = g_play_point_idx + 1;
+    if (next >= r->count) {
+        g_play_state = AUTO_PLAY_RETURNING_CENTER;
+        g_move_target_head = g_center_head;
+        g_move_target_neck = g_center_neck;
+        g_move_step_deg = 3;
+        lv_timer_set_period(g_auto_rotation_timer, 100);
+        if (g_play_recorrido_idx == g_editing_recorrido) {
+            g_ar_playing_point_idx = -1;
+            auto_rotation_editor_refresh_row_colors();
+        }
+        return;
+    }
+    g_play_point_idx = next;
+    g_move_target_head = r->points[next].head;
+    g_move_target_neck = r->points[next].neck;
+    // ms por grado = SPEED * 50 (1=50ms/°, 5=250ms/°, o sea SPEED=1 es el
+    // mas rapido y SPEED=5 el mas lento). Paso fijo de 1 grado por tick, y
+    // el periodo del timer (no el paso) es lo que varia con la velocidad.
+    g_move_step_deg = 1;
+    lv_timer_set_period(g_auto_rotation_timer, r->speed * 50);
+    // Resalta en la lista el punto que se esta ejecutando ahora (solo si el
+    // editor tiene abierto el mismo recorrido que se esta reproduciendo).
+    if (g_play_recorrido_idx == g_editing_recorrido) {
+        g_ar_playing_point_idx = (int)next;
+        auto_rotation_editor_refresh_row_colors();
+    }
+}
+
+static void auto_rotation_on_target_reached(void)
+{
+    switch (g_play_state) {
+    case AUTO_PLAY_ONE_SHOT_MOVE:
+        g_play_state = AUTO_PLAY_IDLE;
+        if (g_auto_rotation_timer) lv_timer_pause(g_auto_rotation_timer);
+        ar_test_set_running(false);
+        break;
+    case AUTO_PLAY_MOVING_TO_START:
+        g_play_state = AUTO_PLAY_PLAYING;
+        g_play_point_idx = 0;
+        auto_rotation_queue_next_point();
+        break;
+    case AUTO_PLAY_PLAYING:
+        auto_rotation_queue_next_point();
+        break;
+    case AUTO_PLAY_RETURNING_CENTER:
+        g_play_state = AUTO_PLAY_IDLE;
+        if (g_auto_rotation_timer) lv_timer_pause(g_auto_rotation_timer);
+        modes_giro_automatico_set_state(g_lang->btn_auto_rotation, false);
+        ar_test_set_running(false);
+        break;
+    default:
+        break;
+    }
+}
+
+static void auto_rotation_timer_cb(lv_timer_t *t)
+{
+    (void)t;
+    int32_t head = get_var_angle_head_value();
+    int32_t neck = get_var_angle_neck_value();
+    bool head_done = (head == g_move_target_head);
+    bool neck_done = (neck == g_move_target_neck);
+    if (!head_done) {
+        int32_t d = g_move_target_head - head;
+        int32_t step = (d > 0) ? (d < g_move_step_deg ? d : g_move_step_deg)
+                                : (d > -g_move_step_deg ? d : -g_move_step_deg);
+        head += step;
+        set_var_angle_head_value(head);
+        hmi_send_data(HMI_REG_ANGLE_HEAD_CHANGED, head);
+        head_done = (head == g_move_target_head);
+    }
+    if (!neck_done) {
+        int32_t d = g_move_target_neck - neck;
+        int32_t step = (d > 0) ? (d < g_move_step_deg ? d : g_move_step_deg)
+                                : (d > -g_move_step_deg ? d : -g_move_step_deg);
+        neck += step;
+        set_var_angle_neck_value(neck);
+        hmi_send_data(HMI_REG_ANGLE_NECK_CHANGED, neck);
+        neck_done = (neck == g_move_target_neck);
+    }
+    auto_rotation_sync_labels(head, neck);
+    if (head_done && neck_done) auto_rotation_on_target_reached();
+}
+
+static void auto_rotation_ensure_timer(void)
+{
+    // 100ms/tick: con g_move_step_deg = velocidad(grados), 1 grado dura
+    // exactamente 100ms en SPEED=1 (10°/s), 50ms en SPEED=2 (20°/s), etc.
+    // Comparte timer con "Test" (paso=2) y el regreso al centro (paso=3),
+    // que tambien quedan mas lentos que antes (era de 40ms).
+    if (!g_auto_rotation_timer) g_auto_rotation_timer = lv_timer_create(auto_rotation_timer_cb, 100, NULL);
+}
+
+static void auto_rotation_start_one_shot_move(int32_t target_head, int32_t target_neck)
+{
+    auto_rotation_ensure_timer();
+    g_play_state = AUTO_PLAY_ONE_SHOT_MOVE;
+    g_move_target_head = target_head;
+    g_move_target_neck = target_neck;
+    g_move_step_deg = 2;
+    lv_timer_set_period(g_auto_rotation_timer, 100);
+    lv_timer_resume(g_auto_rotation_timer);
+}
+
+static void hmi_auto_rotation_play_start(void)
+{
+    if (g_selected_recorrido < 0) return;
+    recorrido_t *r = &g_recorridos[g_selected_recorrido];
+    if (r->count == 0) return;
+    auto_rotation_ensure_timer();
+    g_play_recorrido_idx = (uint8_t)g_selected_recorrido;
+    g_play_state = AUTO_PLAY_MOVING_TO_START;
+    g_move_target_head = r->points[0].head;
+    g_move_target_neck = r->points[0].neck;
+    g_play_point_idx = 0;
+    // ms por grado = SPEED * 50, ver auto_rotation_queue_next_point().
+    g_move_step_deg = 1;
+    lv_timer_set_period(g_auto_rotation_timer, r->speed * 50);
+    lv_timer_resume(g_auto_rotation_timer);
+    modes_giro_automatico_set_state(g_lang->btn_pausar_auto_rotation, true);
+    if (g_play_recorrido_idx == g_editing_recorrido) {
+        g_ar_playing_point_idx = 0;
+        auto_rotation_editor_refresh_row_colors();
+    }
+    ar_test_set_running(true);
+}
+
+// ---- MODES: grilla principal ----
+
+void modes_btn_control_por_puntos_cb(lv_event_t *e)
+{
+    (void)e;
+    modes_show_view(MODES_VIEW_CONTROL_PUNTOS);
+    auto_rotation_sync_labels(get_var_angle_head_value(), get_var_angle_neck_value());
+    if (g_play_state == AUTO_PLAY_IDLE) auto_rotation_start_one_shot_move(g_center_head, g_center_neck);
+}
+
+void modes_btn_config_auto_rotation_cb(lv_event_t *e)
+{
+    (void)e;
+    modes_show_view(MODES_VIEW_AUTOROT_PICKER);
+}
+
+void modes_btn_giro_automatico_cb(lv_event_t *e)
+{
+    (void)e;
+    switch (g_play_state) {
+    case AUTO_PLAY_IDLE:
+        hmi_auto_rotation_play_start();
+        break;
+    case AUTO_PLAY_MOVING_TO_START:
+    case AUTO_PLAY_PLAYING:
+        g_pre_pause_state = g_play_state;
+        g_play_state = AUTO_PLAY_PAUSED;
+        if (g_auto_rotation_timer) lv_timer_pause(g_auto_rotation_timer);
+        modes_giro_automatico_set_state(g_lang->btn_reanudar_auto_rotation, true);
+        break;
+    case AUTO_PLAY_PAUSED:
+        g_play_state = g_pre_pause_state;
+        if (g_auto_rotation_timer) lv_timer_resume(g_auto_rotation_timer);
+        modes_giro_automatico_set_state(g_lang->btn_pausar_auto_rotation, true);
+        break;
+    default:
+        break; // RETURNING_CENTER / ONE_SHOT_MOVE: este boton no responde
+    }
+}
+
+// Detiene cualquier reproduccion en curso (Iniciar Giro Automatico de MODES
+// home, o Test del editor) y la manda de vuelta al centro — mismo
+// comportamiento sea cual sea el boton que la disparo, asi los dos quedan
+// consistentes entre si.
+static void auto_rotation_stop_and_return_center(void)
+{
+    if (g_play_state == AUTO_PLAY_IDLE || g_play_state == AUTO_PLAY_ONE_SHOT_MOVE) return;
+    auto_rotation_ensure_timer();
+    g_play_state = AUTO_PLAY_RETURNING_CENTER;
+    g_move_target_head = g_center_head;
+    g_move_target_neck = g_center_neck;
+    g_move_step_deg = 3;
+    lv_timer_set_period(g_auto_rotation_timer, 100);
+    lv_timer_resume(g_auto_rotation_timer);
+    if (g_play_recorrido_idx == g_editing_recorrido) {
+        g_ar_playing_point_idx = -1;
+        auto_rotation_editor_refresh_row_colors();
+    }
+    modes_giro_automatico_set_state(g_lang->btn_auto_rotation, false);
+    ar_test_set_running(false);
+}
+
+void modes_btn_stop_giro_automatico_cb(lv_event_t *e) { (void)e; auto_rotation_stop_and_return_center(); }
+
+// ---- Control por Puntos ----
+// Los +/- de cabeza/cuello son los originales de MODES, reubicados por
+// screens.c dentro de este panel — conservan sus callbacks de siempre
+// (action_angle_*_btn_* en actions.c), no hace falta nada nuevo aca.
+
+void cp_btn_guardar_centrado_cb(lv_event_t *e)
+{
+    (void)e;
+    int32_t head = get_var_angle_head_value();
+    int32_t neck = get_var_angle_neck_value();
+    int32_t packed = (neck << 16) | (head & 0xFFFF);
+    hmi_send_data(HMI_REG_CENTER, packed);
+    dev_nvs_write_pin(NVS_KEY_CENTER_HEAD, (int)head);
+    dev_nvs_write_pin(NVS_KEY_CENTER_NECK, (int)neck);
+    g_center_head = head;
+    g_center_neck = neck;
+}
+
+void cp_btn_volver_cb(lv_event_t *e) { (void)e; modes_show_view(MODES_VIEW_HOME); }
+
+// ---- Config Auto Rotation — selector de recorrido ----
+
+static void auto_rotation_editor_open(uint8_t idx)
+{
+    g_editing_recorrido = idx;
+    g_selected_recorrido = idx;
+    g_editor_selected_point = -1;
+    // Si ya hay una reproduccion en curso de este mismo recorrido (ej. se
+    // inicio desde MODES home y se entro al editor despues), sincroniza el
+    // resaltado de punto y el boton Test/Detener con el estado real en vez
+    // de asumir que no hay nada corriendo.
+    bool playing_this = (g_play_recorrido_idx == idx) &&
+                         (g_play_state == AUTO_PLAY_MOVING_TO_START ||
+                          g_play_state == AUTO_PLAY_PLAYING ||
+                          g_play_state == AUTO_PLAY_PAUSED);
+    g_ar_playing_point_idx = playing_this ? (int)g_play_point_idx : -1;
+    ar_test_set_running(playing_this);
+    modes_show_view(MODES_VIEW_AUTOROT_EDITOR);
+    if (objects.ar_title_label) {
+        char title[24];
+        lv_snprintf(title, sizeof(title), " RECORRIDO %d", (int)idx + 1);
+        lv_label_set_text(objects.ar_title_label, title);
+    }
+    if (objects.ar_speed_label) {
+        char sbuf[4];
+        lv_snprintf(sbuf, sizeof(sbuf), "%d", (int)g_recorridos[idx].speed);
+        lv_label_set_text(objects.ar_speed_label, sbuf);
+    }
+    auto_rotation_sync_labels(get_var_angle_head_value(), get_var_angle_neck_value());
+    auto_rotation_editor_refresh_list();
+    if (g_play_state == AUTO_PLAY_IDLE) auto_rotation_start_one_shot_move(g_center_head, g_center_neck);
+}
+
+void autorot_btn_recorrido1_cb(lv_event_t *e) { (void)e; auto_rotation_editor_open(0); }
+void autorot_btn_recorrido2_cb(lv_event_t *e) { (void)e; auto_rotation_editor_open(1); }
+void autorot_picker_btn_volver_cb(lv_event_t *e) { (void)e; modes_show_view(MODES_VIEW_HOME); }
+
+// ---- Config Auto Rotation — editor de puntos ----
+
+void ar_angle_neck_dec_cb(lv_event_t *e) { (void)e; angle_axis_bump(objects.ar_angle_neck_label, false, -1); }
+void ar_angle_neck_inc_cb(lv_event_t *e) { (void)e; angle_axis_bump(objects.ar_angle_neck_label, false,  1); }
+void ar_angle_head_dec_cb(lv_event_t *e) { (void)e; angle_axis_bump(objects.ar_angle_head_label, true,  -1); }
+void ar_angle_head_inc_cb(lv_event_t *e) { (void)e; angle_axis_bump(objects.ar_angle_head_label, true,   1); }
+
+// Repinta cada fila de ar_points_list segun su rol actual: verde si es el
+// punto que el Test esta ejecutando ahora mismo (g_ar_playing_point_idx),
+// amarillo oscuro si es el punto tocado/seleccionado para editar
+// (g_editor_selected_point), gris oscuro por defecto. Recalcula todo por
+// indice en vez de guardar punteros a filas — asi sigue siendo correcto
+// despues de que auto_rotation_editor_refresh_list() destruye y recrea las
+// filas (ej. al guardar o borrar un punto).
+static void auto_rotation_editor_refresh_row_colors(void)
+{
+    if (!objects.ar_points_list) return;
+    uint32_t n = lv_obj_get_child_count(objects.ar_points_list);
+    for (uint32_t i = 0; i < n; i++) {
+        lv_obj_t *row = lv_obj_get_child(objects.ar_points_list, i);
+        if (!row) continue;
+        lv_color_t bg;
+        if ((int)i == g_ar_playing_point_idx) bg = lv_color_hex(0xff1e6b3a);
+        else if ((int)i == g_editor_selected_point) bg = lv_color_hex(0xff4a3f0a);
+        else bg = lv_color_hex(0xff1e1e1e);
+        lv_obj_set_style_bg_color(row, bg, LV_PART_MAIN | LV_STATE_DEFAULT);
+    }
+}
+
+// Cambia el boton "Test" a "Detener" (y su color) mientras el Test esta
+// reproduciendo un recorrido completo, y de vuelta a "Test" cuando termina o
+// se lo detiene manualmente — mismo patron que modes_giro_automatico_set_state
+// para el boton de MODES home, pero aplicado al boton del editor.
+static void ar_test_set_running(bool running)
+{
+    if (!objects.ar_btn_probar) return;
+    lv_obj_t *lbl = lv_obj_get_child(objects.ar_btn_probar, 0);
+    if (lbl) lv_label_set_text(lbl, running ? g_lang->btn_detener_prueba : g_lang->btn_probar);
+    lv_color_t border = running ? lv_color_hex(0xffbc0f2d) : lv_color_hex(0xff3c3c3c);
+    lv_obj_set_style_border_color(objects.ar_btn_probar, border, LV_PART_MAIN | LV_STATE_DEFAULT);
+}
+
+void ar_point_row_clicked_cb(lv_event_t *e)
+{
+    int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    recorrido_t *r = &g_recorridos[g_editing_recorrido];
+    if (idx < 0 || idx >= r->count) return;
+    g_editor_selected_point = idx;
+    recorrido_point_t p = r->points[idx];
+    set_var_angle_head_value(p.head);
+    set_var_angle_neck_value(p.neck);
+    auto_rotation_sync_labels(p.head, p.neck);
+    if (g_play_state == AUTO_PLAY_IDLE) auto_rotation_start_one_shot_move(p.head, p.neck);
+
+    // Resalta la fila tocada — asi queda claro cual punto se va a
+    // sobreescribir con "Guardar punto" o borrar con "Eliminar".
+    auto_rotation_editor_refresh_row_colors();
+}
+
+static void auto_rotation_editor_refresh_list(void)
+{
+    if (!objects.ar_points_list) return;
+    lv_obj_clean(objects.ar_points_list); // destruye las filas de abajo
+    recorrido_t *r = &g_recorridos[g_editing_recorrido];
+    for (uint8_t i = 0; i < r->count; i++) {
+        // Formato corto en una sola linea, indice + neck + head (orden y
+        // formato del mockup del usuario: "01      N96 H13").
+        char buf[24];
+        lv_snprintf(buf, sizeof(buf), "%02d      H%d N%d", (int)i + 1, (int)r->points[i].head, (int)r->points[i].neck);
+        lv_obj_t *btn = lv_list_add_btn(objects.ar_points_list, NULL, buf);
+        lv_obj_add_event_cb(btn, ar_point_row_clicked_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+        // La lista tiene fondo oscuro; texto claro para que se lea.
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0xff1e1e1e), LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_border_color(btn, lv_color_hex(0xff333333), LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_t *lbl = lv_obj_get_child(btn, lv_obj_get_child_count(btn) - 1);
+        if (lbl) {
+            lv_obj_set_style_text_color(lbl, lv_color_hex(0xffe5e5e5), LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_label_set_long_mode(lbl, LV_LABEL_LONG_CLIP);
+        }
+    }
+
+    // Alto dinamico: con pocos puntos guardados, un alto fijo dejaba un
+    // marco negro enorme y vacio debajo de la ultima fila. Se mide el alto
+    // real del contenido (LV_SIZE_CONTENT + update_layout forzado) y se
+    // usa eso, con un piso minimo (para que la lista vacia no desaparezca)
+    // y un techo (mas alla de eso, scrollea adentro en vez de seguir
+    // creciendo y empujar el resto de la pantalla). Confirmado que este
+    // comportamiento es el que se queria — no volver a tocar sin pedido
+    // explicito.
+    lv_obj_set_height(objects.ar_points_list, LV_SIZE_CONTENT);
+    lv_obj_update_layout(objects.ar_points_list);
+    lv_coord_t natural_h = lv_obj_get_height(objects.ar_points_list);
+    const lv_coord_t LIST_MIN_H = 70;
+    const lv_coord_t LIST_MAX_H = 210;
+    if (natural_h < LIST_MIN_H) natural_h = LIST_MIN_H;
+    if (natural_h > LIST_MAX_H) natural_h = LIST_MAX_H;
+    lv_obj_set_height(objects.ar_points_list, natural_h);
+    auto_rotation_editor_refresh_row_colors();
+}
+
+void ar_btn_guardar_punto_cb(lv_event_t *e)
+{
+    (void)e;
+    recorrido_t *r = &g_recorridos[g_editing_recorrido];
+    int32_t head = get_var_angle_head_value();
+    int32_t neck = get_var_angle_neck_value();
+    if (g_editor_selected_point >= 0 && g_editor_selected_point < r->count) {
+        r->points[g_editor_selected_point].head = (int16_t)head;
+        r->points[g_editor_selected_point].neck = (int16_t)neck;
+    } else if (r->count < RECORRIDO_MAX_POINTS) {
+        r->points[r->count].head = (int16_t)head;
+        r->points[r->count].neck = (int16_t)neck;
+        r->count++;
+    } else {
+        return; // recorrido lleno (10 puntos), no hace nada
+    }
+    g_editor_selected_point = -1;
+    recorrido_nvs_write(g_editing_recorrido, r);
+    auto_rotation_editor_refresh_list();
+}
+
+// Borra el punto actualmente resaltado en la lista (el que se toco para
+// cargarlo). Si no hay ninguno tocado, no hace nada — evita un borrado por
+// error de "el ultimo punto" sin que el usuario haya elegido cual.
+void ar_btn_eliminar_punto_cb(lv_event_t *e)
+{
+    (void)e;
+    recorrido_t *r = &g_recorridos[g_editing_recorrido];
+    if (g_editor_selected_point < 0 || g_editor_selected_point >= r->count) return;
+    for (int i = g_editor_selected_point; i < r->count - 1; i++) {
+        r->points[i] = r->points[i + 1];
+    }
+    r->count--;
+    g_editor_selected_point = -1;
+    recorrido_nvs_write(g_editing_recorrido, r);
+    auto_rotation_editor_refresh_list();
+}
+
+void ar_speed_dec_cb(lv_event_t *e)
+{
+    (void)e;
+    recorrido_t *r = &g_recorridos[g_editing_recorrido];
+    if (r->speed > 1) r->speed--;
+    recorrido_nvs_write(g_editing_recorrido, r);
+    if (objects.ar_speed_label) { char buf[4]; lv_snprintf(buf, sizeof(buf), "%d", (int)r->speed); lv_label_set_text(objects.ar_speed_label, buf); }
+}
+
+void ar_speed_inc_cb(lv_event_t *e)
+{
+    (void)e;
+    recorrido_t *r = &g_recorridos[g_editing_recorrido];
+    if (r->speed < 5) r->speed++;
+    recorrido_nvs_write(g_editing_recorrido, r);
+    if (objects.ar_speed_label) { char buf[4]; lv_snprintf(buf, sizeof(buf), "%d", (int)r->speed); lv_label_set_text(objects.ar_speed_label, buf); }
+}
+
+void ar_btn_probar_cb(lv_event_t *e)
+{
+    (void)e;
+    if (g_play_state == AUTO_PLAY_IDLE) {
+        g_selected_recorrido = g_editing_recorrido;
+        hmi_auto_rotation_play_start();
+    } else if (g_play_state == AUTO_PLAY_MOVING_TO_START ||
+               g_play_state == AUTO_PLAY_PLAYING ||
+               g_play_state == AUTO_PLAY_PAUSED) {
+        // Vuelve a tocar "Test" (ahora "Detener") mientras esta corriendo:
+        // lo frena y lo manda de vuelta al centro, igual que "Cancelar" en
+        // MODES home.
+        auto_rotation_stop_and_return_center();
+    }
+    // ONE_SHOT_MOVE / RETURNING_CENTER: sin efecto, ya se esta deteniendo o
+    // es un movimiento de otro origen ajeno al Test.
+}
+
+void ar_btn_volver_cb(lv_event_t *e) { (void)e; modes_show_view(MODES_VIEW_AUTOROT_PICKER); }
+
+// ---- Settings > Limites de Servo ----
+
+void hmi_srv_limits_load_to_ui(void)
+{
+    lv_obj_t *lbls[6] = {
+        objects.sl_srv1_min_label, objects.sl_srv1_max_label,
+        objects.sl_srv2_min_label, objects.sl_srv2_max_label,
+        objects.sl_srv3_min_label, objects.sl_srv3_max_label,
+    };
+    int16_t vals[6] = {
+        g_srv_limits.srv1.min, g_srv_limits.srv1.max,
+        g_srv_limits.srv2.min, g_srv_limits.srv2.max,
+        g_srv_limits.srv3.min, g_srv_limits.srv3.max,
+    };
+    for (int i = 0; i < 6; i++) {
+        if (!lbls[i]) continue;
+        char buf[6];
+        lv_snprintf(buf, sizeof(buf), "%03d", (int)vals[i]);
+        lv_label_set_text(lbls[i], buf);
+    }
+}
+
+void sl_limit_btn_cb(lv_event_t *e)
+{
+    int code = (int)(intptr_t)lv_event_get_user_data(e);
+    int servo_idx = code / 100;      // 0,1,2
+    bool is_max   = (code % 100) >= 10;
+    bool increase = (code % 10) != 0;
+    servo_limit_t *lim = (servo_idx == 0) ? &g_srv_limits.srv1 : (servo_idx == 1) ? &g_srv_limits.srv2 : &g_srv_limits.srv3;
+    int16_t *val = is_max ? &lim->max : &lim->min;
+    int16_t delta = increase ? 1 : -1;
+    int32_t nv = (int32_t)*val + delta;
+    if (nv < 0) nv = 0;
+    if (nv > 270) nv = 270;
+    // El minimo no puede superar al maximo, ni el maximo bajar del minimo
+    if (is_max && nv < lim->min) nv = lim->min;
+    if (!is_max && nv > lim->max) nv = lim->max;
+    *val = (int16_t)nv;
+    hmi_srv_limits_load_to_ui();
+}
+
+void sl_btn_guardar_cb(lv_event_t *e)
+{
+    (void)e;
+    srv_limits_nvs_write(&g_srv_limits);
+    int32_t p1 = ((int32_t)g_srv_limits.srv1.max << 16) | (g_srv_limits.srv1.min & 0xFFFF);
+    int32_t p2 = ((int32_t)g_srv_limits.srv2.max << 16) | (g_srv_limits.srv2.min & 0xFFFF);
+    int32_t p3 = ((int32_t)g_srv_limits.srv3.max << 16) | (g_srv_limits.srv3.min & 0xFFFF);
+    hmi_send_data(HMI_REG_SRV1_LIMITS, p1);
+    hmi_send_data(HMI_REG_SRV2_LIMITS, p2);
+    hmi_send_data(HMI_REG_SRV3_LIMITS, p3);
+}
+
+// Llamar una vez desde app_main, despues de que los paneles de MODES/Settings
+// existan (create_panel_modes_auto_rotation / create_panel_settings_srv_limits).
+void hmi_auto_rotation_init(void)
+{
+    for (int i = 0; i < RECORRIDO_COUNT; i++) recorrido_nvs_read((uint8_t)i, &g_recorridos[i]);
+    srv_limits_nvs_read(&g_srv_limits);
+    g_center_head = dev_nvs_read_pin(NVS_KEY_CENTER_HEAD, 90);
+    g_center_neck = dev_nvs_read_pin(NVS_KEY_CENTER_NECK, 90);
+    modes_show_view(MODES_VIEW_HOME);
+    modes_giro_automatico_set_state(g_lang->btn_auto_rotation, false);
+}
+
+#define NVS_KEY_ENC_MODE_FEET   "enc_mode_ft"  // 0=Metros, 1=Pies (toggle de GENERAL CONTROLS)
 #define ENC_PERIM_CX100_DEF     8520          // 85.20 mm
 #define ENC_PPR_DEF              600
 #define VIS_LOG  (1 << 0)
@@ -1270,6 +1986,48 @@ void update_wifi_toggle_cb(lv_event_t *e)
     hmi_wifi_set_enabled(!s_wifi_enabled);
 }
 
+//*************************************************************************************
+// System Info > Update > CONSOLA — WiFi/OTA de la placa de consola (distinto
+// del WiFi de la propia pantalla, de mas arriba). Todo llega/sale por UART:
+// 0x1E OTA_STATUS, 0x1F FW_VERSION, 0x20 WIFI_STATUS (RX) y 0x23 WIFI_ENABLE
+// (TX). El boton no asume el estado: manda el pedido y muestra "Conectando..."
+// hasta que la consola confirma con WIFI_STATUS=1 (recomendacion del spec).
+//*************************************************************************************
+static bool s_console_wifi_connected    = false; // ultimo WIFI_STATUS recibido
+static bool s_console_wifi_requested_on = false; // ultimo pedido mandado por el boton
+
+static void console_wifi_ui_refresh(void)
+{
+    if (objects.console_wifi_led) {
+        lv_led_set_brightness(objects.console_wifi_led, s_console_wifi_connected ? 255 : 0);
+    }
+    if (objects.console_wifi_toggle_btn) {
+        lv_obj_t *lbl = lv_obj_get_child(objects.console_wifi_toggle_btn, 0);
+        if (lbl) {
+            const char *text;
+            if (s_console_wifi_connected) {
+                text = "Disable Console WiFi";
+            } else if (s_console_wifi_requested_on) {
+                text = "Connecting...";
+            } else {
+                text = "Enable Console WiFi";
+            }
+            lv_label_set_text(lbl, text);
+        }
+        hmi_style_btn(objects.console_wifi_toggle_btn, s_console_wifi_connected);
+    }
+}
+
+void console_wifi_toggle_cb(lv_event_t *e)
+{
+    (void)e;
+    // Si ya esta conectada, tocar el boton pide apagarla; si no, pide prenderla.
+    bool turn_on = !s_console_wifi_connected;
+    s_console_wifi_requested_on = turn_on;
+    hmi_send_data(HMI_REG_WIFI_ENABLE, turn_on ? 1 : 0);
+    console_wifi_ui_refresh();
+}
+
 // Desactiva todos los botones de nav dinamicos (logs/val/joy/serial/dev)
 // Llamado desde actions.c cuando se activa un boton fijo (Device/Version/Guide)
 void hmi_deactivate_dynamic_nav(void)
@@ -1328,6 +2086,17 @@ static void dev_nvs_write_pin(const char *key, int val)
 }
 static int dev_uart_tx_pin(void) { return dev_nvs_read_pin(NVS_KEY_UART_TX, HMI_UART_TXD); }
 static int dev_uart_rx_pin(void) { return dev_nvs_read_pin(NVS_KEY_UART_RX, HMI_UART_RXD); }
+
+#define NVS_KEY_UI_THEME "ui_theme"
+#define NVS_KEY_UI_LANG  "ui_lang"
+#define NVS_KEY_UI_BATD  "ui_batd"
+
+void hmi_ui_prefs_save_theme(int theme_idx)      { dev_nvs_write_pin(NVS_KEY_UI_THEME, theme_idx); }
+void hmi_ui_prefs_save_lang(int lang_id)         { dev_nvs_write_pin(NVS_KEY_UI_LANG, lang_id); }
+void hmi_ui_prefs_save_bat_display(int percent)  { dev_nvs_write_pin(NVS_KEY_UI_BATD, percent); }
+int  hmi_ui_prefs_load_theme(void)               { return dev_nvs_read_pin(NVS_KEY_UI_THEME, 1); }
+int  hmi_ui_prefs_load_lang(void)                { return dev_nvs_read_pin(NVS_KEY_UI_LANG, 0); }
+int  hmi_ui_prefs_load_bat_display(void)         { return dev_nvs_read_pin(NVS_KEY_UI_BATD, 0); }
 
 static void dev_nvs_read_pin_str(char *out, size_t max)
 {
@@ -1477,33 +2246,31 @@ static void settings_nav_enable_scroll(void)
 }
 
 //*************************************************************************************
-// GENERAL CONTROLS > tarjeta ENCODER — toggle Pulsos/Metros usando la calibracion
+// GENERAL CONTROLS > tarjeta ENCODER — toggle Pies/Metros usando la calibracion
 // guardada en Settings > Encoder (mismo patron que el toggle Voltaje/Porcentaje
 // de bateria: g_bat_display_percent + apply_btn_style).
 //*************************************************************************************
-static bool     s_encoder_show_meters   = false;
+static bool     s_encoder_show_feet     = false;
 static int32_t  s_encoder_last_raw      = 0;
-static lv_obj_t *s_encoder_btn_pulses   = NULL;
+static lv_obj_t *s_encoder_btn_feet     = NULL;
 static lv_obj_t *s_encoder_btn_meters   = NULL;
 
 static void encoder_dashboard_refresh(void)
 {
     if (!objects.encoder_value) return;
 
-    if (s_encoder_show_meters) {
-        int32_t perim_cx100 = dev_nvs_read_pin(NVS_KEY_ENC_PERIM_CX100, ENC_PERIM_CX100_DEF);
-        int32_t ppr         = dev_nvs_read_pin(NVS_KEY_ENC_PPR, ENC_PPR_DEF);
-        float perim_mm = perim_cx100 / 100.0f;
-        float dist_m = (ppr > 0) ? ((float)s_encoder_last_raw * perim_mm) / ((float)ppr * 1000.0f) : 0.0f;
-        char buf[24];
-        snprintf(buf, sizeof(buf), "%.3f m", dist_m);
-        lv_label_set_text(objects.encoder_value, buf);
+    int32_t perim_cx100 = dev_nvs_read_pin(NVS_KEY_ENC_PERIM_CX100, ENC_PERIM_CX100_DEF);
+    int32_t ppr         = dev_nvs_read_pin(NVS_KEY_ENC_PPR, ENC_PPR_DEF);
+    float perim_mm = perim_cx100 / 100.0f;
+    float dist_m  = (ppr > 0) ? ((float)s_encoder_last_raw * perim_mm) / ((float)ppr * 1000.0f) : 0.0f;
+
+    char buf[24];
+    if (s_encoder_show_feet) {
+        snprintf(buf, sizeof(buf), "%.2f ft", dist_m * 3.28084f);
     } else {
-        char buf[20];
-        snprintf(buf, sizeof(buf), "%06ld", (long)s_encoder_last_raw);
-        set_var_encoder(buf);
-        lv_label_set_text_static(objects.encoder_value, get_var_encoder());
+        snprintf(buf, sizeof(buf), "%.3f m", dist_m);
     }
+    lv_label_set_text(objects.encoder_value, buf);
 }
 
 void hmi_encoder_set_raw(int32_t raw_pulses)
@@ -1514,22 +2281,22 @@ void hmi_encoder_set_raw(int32_t raw_pulses)
 
 // Aplica el modo (UI + estado) sin tocar NVS — usado para restaurar el valor
 // guardado al arrancar, sin pisarlo con el default.
-static void encoder_mode_apply(bool meters)
+static void encoder_mode_apply(bool feet)
 {
-    s_encoder_show_meters = meters;
-    hmi_style_btn(s_encoder_btn_pulses, !meters);
-    hmi_style_btn(s_encoder_btn_meters,  meters);
+    s_encoder_show_feet = feet;
+    hmi_style_btn(s_encoder_btn_feet,   feet);
+    hmi_style_btn(s_encoder_btn_meters, !feet);
     encoder_dashboard_refresh();
 }
 
-// Elegido por el usuario (toque en PULSOS/METROS): persiste en NVS y aplica.
-static void encoder_mode_set(bool meters)
+// Elegido por el usuario (toque en PIES/METROS): persiste en NVS y aplica.
+static void encoder_mode_set(bool feet)
 {
-    dev_nvs_write_pin(NVS_KEY_ENC_MODE_METERS, meters ? 1 : 0);
-    encoder_mode_apply(meters);
+    dev_nvs_write_pin(NVS_KEY_ENC_MODE_FEET, feet ? 1 : 0);
+    encoder_mode_apply(feet);
 }
-static void encoder_mode_pulses_cb(lv_event_t *e) { (void)e; encoder_mode_set(false); }
-static void encoder_mode_meters_cb(lv_event_t *e) { (void)e; encoder_mode_set(true); }
+static void encoder_mode_feet_cb(lv_event_t *e)   { (void)e; encoder_mode_set(true); }
+static void encoder_mode_meters_cb(lv_event_t *e) { (void)e; encoder_mode_set(false); }
 
 // Se engancha a la tarjeta ENCODER ya creada por screens.c en GENERAL CONTROLS
 // (objects.obj17), en el hueco libre entre el valor grande y el boton RESET.
@@ -1537,22 +2304,22 @@ static void encoder_display_toggle_create(void)
 {
     if (!objects.obj17) return;
 
-    lv_obj_t *btn_p = lv_button_create(objects.obj17);
-    s_encoder_btn_pulses = btn_p;
-    lv_obj_set_pos(btn_p, 320, 40);
-    lv_obj_set_size(btn_p, 90, 22);
-    lv_obj_set_style_radius(btn_p, 6, 0);
-    lv_obj_set_style_shadow_opa(btn_p, 0, 0);
-    lv_obj_t *lbl_p = lv_label_create(btn_p);
-    lv_obj_set_style_align(lbl_p, LV_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(lbl_p, &lv_font_montserrat_12, 0);
-    lv_label_set_text(lbl_p, g_lang->btn_pulses);
-    lv_obj_add_event_cb(btn_p, encoder_mode_pulses_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *btn_f = lv_button_create(objects.obj17);
+    s_encoder_btn_feet = btn_f;
+    lv_obj_set_pos(btn_f, 66, 100);
+    lv_obj_set_size(btn_f, 110, 30);
+    lv_obj_set_style_radius(btn_f, 6, 0);
+    lv_obj_set_style_shadow_opa(btn_f, 0, 0);
+    lv_obj_t *lbl_f = lv_label_create(btn_f);
+    lv_obj_set_style_align(lbl_f, LV_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(lbl_f, &lv_font_montserrat_12, 0);
+    lv_label_set_text(lbl_f, g_lang->btn_feet);
+    lv_obj_add_event_cb(btn_f, encoder_mode_feet_cb, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t *btn_m = lv_button_create(objects.obj17);
     s_encoder_btn_meters = btn_m;
-    lv_obj_set_pos(btn_m, 320, 68);
-    lv_obj_set_size(btn_m, 90, 22);
+    lv_obj_set_pos(btn_m, 191, 100);
+    lv_obj_set_size(btn_m, 110, 30);
     lv_obj_set_style_radius(btn_m, 6, 0);
     lv_obj_set_style_shadow_opa(btn_m, 0, 0);
     lv_obj_t *lbl_m = lv_label_create(btn_m);
@@ -1561,17 +2328,16 @@ static void encoder_display_toggle_create(void)
     lv_label_set_text(lbl_m, g_lang->btn_meters);
     lv_obj_add_event_cb(btn_m, encoder_mode_meters_cb, LV_EVENT_CLICKED, NULL);
 
-    // Restaurar el modo guardado en NVS (default: pulsos, igual que el label
-    // original "0000000") sin volver a escribirlo — encoder_mode_apply() no
-    // toca NVS, a diferencia de encoder_mode_set() (que es solo para cuando
-    // el usuario toca un boton).
-    bool saved_meters = dev_nvs_read_pin(NVS_KEY_ENC_MODE_METERS, 0) != 0;
-    encoder_mode_apply(saved_meters);
+    // Restaurar el modo guardado en NVS (default: metros) sin volver a
+    // escribirlo — encoder_mode_apply() no toca NVS, a diferencia de
+    // encoder_mode_set() (que es solo para cuando el usuario toca un boton).
+    bool saved_feet = dev_nvs_read_pin(NVS_KEY_ENC_MODE_FEET, 0) != 0;
+    encoder_mode_apply(saved_feet);
 }
 
 // Llamado desde lang_apply() (ui/lang.c) al final, para refrescar textos que
 // dependen de estado que solo main.c conoce (boton/estado de WiFi, toggle
-// Pulsos/Metros, formula del footer de Encoder) cuando cambia el idioma.
+// Pies/Metros, formula del footer de Encoder) cuando cambia el idioma.
 void hmi_extra_panels_apply_lang(void)
 {
     // Boton toggle de WiFi: el texto depende del estado actual (activado/desactivado)
@@ -1586,10 +2352,10 @@ void hmi_extra_panels_apply_lang(void)
         update_panel_set_status(g_lang->lbl_wifi_off, false);
     }
 
-    // Toggle Pulsos/Metros del dashboard
-    if (s_encoder_btn_pulses) {
-        lv_obj_t *lbl = lv_obj_get_child(s_encoder_btn_pulses, 0);
-        if (lbl) lv_label_set_text(lbl, g_lang->btn_pulses);
+    // Toggle Pies/Metros del dashboard
+    if (s_encoder_btn_feet) {
+        lv_obj_t *lbl = lv_obj_get_child(s_encoder_btn_feet, 0);
+        if (lbl) lv_label_set_text(lbl, g_lang->btn_feet);
     }
     if (s_encoder_btn_meters) {
         lv_obj_t *lbl = lv_obj_get_child(s_encoder_btn_meters, 0);
@@ -1598,6 +2364,15 @@ void hmi_extra_panels_apply_lang(void)
 
     // Formula del footer de Encoder (numeros + texto en el idioma actual)
     enc_recalc_footer();
+
+    // Boton Iniciar/Pausar/Reanudar de Giro Automatico: lang_apply() ya puso
+    // el texto default (idle) via L->btn_auto_rotation; si hay una
+    // reproduccion en curso hay que pisarlo con el texto de estado correcto.
+    if (g_play_state == AUTO_PLAY_MOVING_TO_START || g_play_state == AUTO_PLAY_PLAYING) {
+        modes_giro_automatico_set_state(g_lang->btn_pausar_auto_rotation, true);
+    } else if (g_play_state == AUTO_PLAY_PAUSED) {
+        modes_giro_automatico_set_state(g_lang->btn_reanudar_auto_rotation, true);
+    }
 }
 
 // Forward declarations
@@ -3347,7 +4122,7 @@ static void lp_open(void)
     lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
     lv_obj_t *title = lv_label_create(card);
-    lv_label_set_text(title, "NUEVO PIN DE BLOQUEO");
+    lv_label_set_text(title, g_lang->title_new_lock_pin);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(title, lv_color_hex(LS_COL_ACCENT), 0);
     lv_obj_set_width(title, LV_PCT(100));
@@ -3361,7 +4136,7 @@ static void lp_open(void)
     lv_obj_set_width(s_lp_display, LV_PCT(100));
 
     lv_obj_t *hint = lv_label_create(card);
-    lv_label_set_text(hint, "4 digitos");
+    lv_label_set_text(hint, g_lang->sub_lock_pin_digits);
     lv_obj_set_style_text_font(hint, &lv_font_montserrat_12, 0);
     lv_obj_set_style_text_color(hint, lv_color_hex(LS_COL_TXT_DIM), 0);
     lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);
@@ -3401,7 +4176,7 @@ static void lp_open(void)
     lv_obj_set_style_radius(cancel, 8, 0);
     lv_obj_add_event_cb(cancel, (lv_event_cb_t)lp_close, LV_EVENT_CLICKED, NULL);
     lv_obj_t *clbl = lv_label_create(cancel);
-    lv_label_set_text(clbl, "Cancelar");
+    lv_label_set_text(clbl, g_lang->btn_cancel);
     lv_obj_set_style_text_font(clbl, &lv_font_montserrat_14, 0);
     lv_obj_center(clbl);
 }
@@ -3580,13 +4355,13 @@ static void ls_do_validate(void)
     if (s_ls_len == DEV_PIN_LEN && strcmp(s_ls_buf, stored) == 0) {
         ls_dots_color(lv_color_hex(LS_COL_OK));
         ls_set_card_state(1);
-        ls_set_status("Acceso concedido", lv_color_hex(LS_COL_OK));
+        ls_set_status(g_lang->lbl_lock_access_granted, lv_color_hex(LS_COL_OK));
         lv_timer_t *t = lv_timer_create(ls_unlock_timer_cb, 550, NULL);
         lv_timer_set_repeat_count(t, 1);
     } else {
         ls_dots_color(lv_color_hex(LS_COL_ERR));
         ls_set_card_state(2);
-        ls_set_status("PIN incorrecto", lv_color_hex(LS_COL_ERR));
+        ls_set_status(g_lang->lbl_lock_pin_incorrect, lv_color_hex(LS_COL_ERR));
         if (s_ls_card) {
             lv_anim_t a;
             lv_anim_init(&a);
@@ -3692,7 +4467,7 @@ static void lock_screen_create(void)
         lv_obj_center(av_lbl);
 
         char greet_msg[DEV_NAME_MAX + 8];
-        snprintf(greet_msg, sizeof(greet_msg), "HOLA %s", greet_name);
+        snprintf(greet_msg, sizeof(greet_msg), g_lang->lbl_lock_greeting_prefix, greet_name);
 
         lv_obj_t *greet = lv_label_create(panel);
         lv_label_set_text(greet, greet_msg);
@@ -3702,7 +4477,7 @@ static void lock_screen_create(void)
         lv_obj_align(greet, LV_ALIGN_CENTER, 0, 30);
 
         lv_obj_t *sub = lv_label_create(panel);
-        lv_label_set_text(sub, "Ingresando...");
+        lv_label_set_text(sub, g_lang->lbl_lock_signing_in);
         lv_obj_set_style_text_font(sub, &lv_font_montserrat_14, 0);
         lv_obj_set_style_text_color(sub, lv_color_hex(LS_COL_TXT_DIM), 0);
         lv_obj_align(sub, LV_ALIGN_CENTER, 0, 60);
@@ -3794,7 +4569,7 @@ static void lock_screen_create(void)
 
     lv_obj_t *hint = lv_label_create(field);
     s_ls_hint_lbl = hint;
-    lv_label_set_text(hint, "Toca para ingresar");
+    lv_label_set_text(hint, g_lang->lbl_lock_tap_to_enter);
     lv_obj_set_style_text_font(hint, &lv_font_montserrat_12, 0);
     lv_obj_set_style_text_color(hint, lv_color_hex(LS_COL_TXT_DIM), 0);
 
@@ -4141,11 +4916,11 @@ void hmi_handle_reg(uint8_t reg, int32_t value)
                     bat_blink_border_timer = NULL;
                 }
                 if (objects.obj6 != NULL) {
-                    lv_obj_set_style_border_color(objects.obj6, lv_color_hex(0xff252525), LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_border_color(objects.obj6, hmi_theme_bd_card(), LV_PART_MAIN | LV_STATE_DEFAULT);
                     lv_obj_set_style_border_width(objects.obj6, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
                 }
                 if (objects.obj0 != NULL) {
-                    lv_obj_set_style_bg_color(objects.obj0, lv_color_hex(0xff393939), LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_bg_color(objects.obj0, hmi_theme_bg_topbar(), LV_PART_MAIN | LV_STATE_DEFAULT);
                 }
             }
         );
@@ -4299,6 +5074,58 @@ void hmi_handle_reg(uint8_t reg, int32_t value)
 #ifdef DEV_MODE
         s_srv3_angle = (int16_t)value;
 #endif
+        break;
+    }
+
+    case HMI_REG_OTA_STATUS:
+    {
+        static const char *ota_status_text[] = {
+            "Checking server...",       // 0
+            "No connection to server",  // 1
+            "Firmware up to date",      // 2
+            "Updating...",              // 3
+            "Update successful, restarting", // 4
+            "Update failed",            // 5
+        };
+        const char *text = (value >= 0 && value < (int32_t)(sizeof(ota_status_text) / sizeof(ota_status_text[0])))
+            ? ota_status_text[value] : "Unknown status";
+
+        HMI_LV_LOCKED(
+            if (objects.console_ota_status_label) {
+                lv_label_set_text(objects.console_ota_status_label, text);
+            }
+            if (objects.console_ota_led) {
+                bool busy = (value == 0 || value == 3);
+                bool ok   = (value == 2 || value == 4);
+                lv_led_set_color(objects.console_ota_led,
+                    ok ? lv_color_hex(0xff00971c) : (busy ? lv_color_hex(0xfff5c518) : lv_color_hex(0xffe74c3c)));
+                lv_led_set_brightness(objects.console_ota_led, (value == 1) ? 0 : 255);
+            }
+        );
+        ESP_LOGI(TAG, "HMI_REG_OTA_STATUS: %d (%s)", (int)value, text);
+        break;
+    }
+
+    case HMI_REG_FW_VERSION:
+    {
+        uint8_t major = (value >> 16) & 0xFF;
+        uint8_t minor = (value >> 8)  & 0xFF;
+        uint8_t patch = value & 0xFF;
+        char buff[40];
+        snprintf(buff, sizeof(buff), "Console firmware: v%u.%u.%u", major, minor, patch);
+
+        HMI_LV_SAFE_OBJ(objects.console_fw_version_label,
+            lv_label_set_text(objects.console_fw_version_label, buff));
+        ESP_LOGI(TAG, "HMI_REG_FW_VERSION: v%u.%u.%u", major, minor, patch);
+        break;
+    }
+
+    case HMI_REG_WIFI_STATUS:
+    {
+        s_console_wifi_connected = (value != 0);
+        if (!s_console_wifi_connected) s_console_wifi_requested_on = false;
+        HMI_LV_LOCKED(console_wifi_ui_refresh());
+        ESP_LOGI(TAG, "HMI_REG_WIFI_STATUS: %d", (int)value);
         break;
     }
 

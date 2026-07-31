@@ -196,19 +196,6 @@ void action_angle_head_label_pressed(lv_event_t *e) {
     hmi_send_data(HMI_REG_ANGLE_HEAD_CHANGED, value);
 }
 
-void action_btn_giro_automatico(lv_event_t *e) {
-    // TODO: Implement action btn_giro_automatico here
-    int32_t value = 0;
-
-    hmi_send_data(HMI_REG_GIRO_AUTOMATICO, 1);
-
-    /*value = get_var_angle_head_value();
-    hmi_send_data(HMI_REG_ANGLE_HEAD_CHANGED, value);
-
-    value = get_var_angle_neck_value();
-    hmi_send_data(HMI_REG_ANGLE_NECK_CHANGED, value);*/
-}
-
 void action_btn_start_demo(lv_event_t *e) {
     // TODO: Implement action btn_start_demo here
     hmi_send_data(HMI_REG_START_DEMO, 1);
@@ -217,13 +204,6 @@ void action_btn_start_demo(lv_event_t *e) {
 void action_btn_stop_demo(lv_event_t *e) {
     // TODO: Implement action btn_stop_demo here
     hmi_send_data(HMI_REG_STOP_DEMO, 1);
-}
-
-void action_btn_center(lv_event_t *e) {
-    int32_t neck   = get_var_angle_neck_value();
-    int32_t head   = get_var_angle_head_value();
-    int32_t packed = (neck << 16) | (head & 0xFFFF);
-    hmi_send_data(HMI_REG_CENTER, packed);
 }
 
 /* ================================================================
@@ -437,6 +417,11 @@ static void theme_technology_panel(lv_obj_t *panel) {
  * color activo/inactivo depende de estado logico que solo main.c conoce). */
 void __attribute__((weak)) hmi_update_panel_retheme(void) {}
 
+/* Weak: reaplicado en main.c para mantener el resaltado del boton "Iniciar
+ * Giro Automatico" cuando cambia el tema (su estado activo/inactivo depende
+ * del motor de reproduccion, que solo main.c conoce). */
+void __attribute__((weak)) hmi_modes_giro_retheme(void) {}
+
 /* Themes the "Update" (WiFi/OTA) panel de System Info — creado dinamicamente
  * en main.c. No se reusa theme_info_panel() generico: su heuristica por
  * cantidad de hijos (2 hijos = fila key/val) no encaja con la fila
@@ -459,6 +444,77 @@ static void theme_update_panel(lv_obj_t *panel) {
     if (objects.update_duration_note) lv_obj_set_style_text_color(objects.update_duration_note, g_theme.txt_secondary, LV_PART_MAIN | LV_STATE_DEFAULT);
 
     hmi_update_panel_retheme();
+}
+
+/* Themes el titulo (accent + borde) de una barra superior fija creada por
+ * auto_rotation_make_topbar() en screens.c. Los botones "Volver"/ATRAS de
+ * esas barras, y los botones "Guardar punto"/"Probar" del editor, quedan
+ * con su blanco/negro fijo del mockup del usuario en cualquier tema — no
+ * se tematizan (a proposito, para que resalten siempre igual). */
+static void theme_topbar_title(lv_obj_t *title) {
+    if (!title) return;
+    lv_obj_set_style_text_color(title,   g_theme.txt_accent, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_color(title, g_theme.txt_accent, LV_PART_MAIN | LV_STATE_DEFAULT);
+}
+
+/* Themes "Control por Puntos" — pantalla completa dentro de MODES, creada
+ * dinamicamente en screens.c (create_panel_modes_auto_rotation). Los +/- de
+ * cabeza/cuello que contiene son los ORIGINALES de MODES (obj19/obj21,
+ * angle_*_btn_*, angle_*_label), reubicados via reparent — ya se tematizan
+ * incondicionalmente en la seccion "PANEO tab" mas abajo en apply_theme(). */
+static void theme_control_puntos_panel(lv_obj_t *panel) {
+    if (!panel) return;
+    theme_topbar_title(objects.cp_title_label);
+    // cp_btn_guardar_centrado queda amarillo/negro fijo (accion primaria),
+    // no se tematiza — mismo criterio que ar_btn_guardar_punto/ar_btn_probar.
+}
+
+/* Themes el selector de recorrido de "Config Auto Rotation". */
+static void theme_autorot_picker_panel(lv_obj_t *panel) {
+    if (!panel) return;
+    theme_topbar_title(objects.autorot_picker_title_label);
+    if (objects.autorot_picker_subtitle_label) lv_obj_set_style_text_color(objects.autorot_picker_subtitle_label, g_theme.txt_secondary, LV_PART_MAIN | LV_STATE_DEFAULT);
+    apply_btn_style(objects.autorot_btn_recorrido1, false);
+    apply_btn_style(objects.autorot_btn_recorrido2, false);
+}
+
+/* Themes el editor de puntos de "Config Auto Rotation". Tarjetas de servo,
+ * botones +/- amarillos, velocidad y los numeros grandes quedan con su
+ * estetica fija (oscura + amarillo) del mockup del usuario en cualquier
+ * tema — solo el titulo de la barra superior sigue al tema activo, mismo
+ * criterio que ar_btn_guardar_punto/ar_btn_probar. */
+static void theme_autorot_editor_panel(lv_obj_t *panel) {
+    if (!panel) return;
+    theme_topbar_title(objects.ar_title_label);
+}
+
+/* Themes Settings > Limites de Servo. */
+static void theme_srv_limits_panel(lv_obj_t *panel) {
+    if (!panel) return;
+    theme_panel_title(panel);
+    lv_obj_t *subtitle = lv_obj_get_child(panel, 1);
+    if (subtitle) lv_obj_set_style_text_color(subtitle, g_theme.txt_secondary, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_t *dec_btns[6] = {
+        objects.sl_srv1_min_btn_decrese, objects.sl_srv1_max_btn_decrese,
+        objects.sl_srv2_min_btn_decrese, objects.sl_srv2_max_btn_decrese,
+        objects.sl_srv3_min_btn_decrese, objects.sl_srv3_max_btn_decrese,
+    };
+    lv_obj_t *inc_btns[6] = {
+        objects.sl_srv1_min_btn_increased, objects.sl_srv1_max_btn_increased,
+        objects.sl_srv2_min_btn_increased, objects.sl_srv2_max_btn_increased,
+        objects.sl_srv3_min_btn_increased, objects.sl_srv3_max_btn_increased,
+    };
+    lv_obj_t *lbls[6] = {
+        objects.sl_srv1_min_label, objects.sl_srv1_max_label,
+        objects.sl_srv2_min_label, objects.sl_srv2_max_label,
+        objects.sl_srv3_min_label, objects.sl_srv3_max_label,
+    };
+    for (int i = 0; i < 6; i++) {
+        apply_btn_style(dec_btns[i], false);
+        apply_btn_style(inc_btns[i], false);
+        if (lbls[i]) lv_obj_set_style_text_color(lbls[i], g_theme.txt_accent, LV_PART_MAIN | LV_STATE_DEFAULT);
+    }
+    apply_btn_style(objects.sl_btn_guardar, false);
 }
 
 /* ---- System Info navigation ---- */
@@ -520,30 +576,32 @@ void action_sysinfo_btn_update(lv_event_t *e) {
 /* ---- Settings navigation ---- */
 
 static void settings_set_nav_active(lv_obj_t *active_btn) {
-    lv_obj_t *btns[7] = {
+    lv_obj_t *btns[8] = {
         objects.settings_btn_brightness,
         objects.settings_btn_theme,
         objects.settings_btn_battery,
         objects.settings_btn_language,
         objects.settings_btn_user,
         objects.settings_btn_encoder,
-        objects.settings_btn_tecnologia
+        objects.settings_btn_tecnologia,
+        objects.settings_btn_srv_limits
     };
-    for (int i = 0; i < 7; i++)
+    for (int i = 0; i < 8; i++)
         apply_btn_style(btns[i], btns[i] == active_btn);
 }
 
 static void settings_show_panel(lv_obj_t *panel) {
-    lv_obj_t *panels[7] = {
+    lv_obj_t *panels[8] = {
         objects.settings_content_brightness,
         objects.settings_content_theme,
         objects.settings_content_battery,
         objects.settings_content_language,
         objects.settings_content_user,
         objects.settings_content_encoder,
-        objects.settings_content_tecnologia
+        objects.settings_content_tecnologia,
+        objects.settings_content_srv_limits
     };
-    for (int i = 0; i < 7; i++) {
+    for (int i = 0; i < 8; i++) {
         if (!panels[i]) continue;
         if (panels[i] == panel)
             lv_obj_remove_flag(panels[i], LV_OBJ_FLAG_HIDDEN);
@@ -600,6 +658,13 @@ void action_settings_btn_tecnologia(lv_event_t *e) {
     settings_show_panel(objects.settings_content_tecnologia);
 }
 
+void action_settings_btn_srv_limits(lv_event_t *e) {
+    g_settings_active_nav = objects.settings_btn_srv_limits;
+    settings_set_nav_active(objects.settings_btn_srv_limits);
+    settings_show_panel(objects.settings_content_srv_limits);
+    hmi_srv_limits_load_to_ui();
+}
+
 // Botones "A"/"B" del panel Tecnologia: mientras estan presionados mandan 1
 // por el serial HMI (la placa de consola prende el LED correspondiente), y
 // al soltarlos mandan 0 (lo apagan). PRESS_LOST cubre el caso de que el dedo
@@ -646,18 +711,21 @@ void action_lang_es(lv_event_t *e) {
     lang_set(LANG_ES);
     lang_apply();
     lang_set_btn_active(objects.lang_btn_es);
+    hmi_ui_prefs_save_lang((int)LANG_ES);
 }
 
 void action_lang_en(lv_event_t *e) {
     lang_set(LANG_EN);
     lang_apply();
     lang_set_btn_active(objects.lang_btn_en);
+    hmi_ui_prefs_save_lang((int)LANG_EN);
 }
 
 void action_lang_pt(lv_event_t *e) {
     lang_set(LANG_PT);
     lang_apply();
     lang_set_btn_active(objects.lang_btn_pt);
+    hmi_ui_prefs_save_lang((int)LANG_PT);
 }
 
 /* ---- Theme selector ---- */
@@ -884,12 +952,28 @@ static void apply_theme(int t) {
     lv_obj_set_style_bg_color(objects.angle_head_label,     th->txt_accent, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_border_color(objects.angle_head_label, th->txt_accent, LV_PART_MAIN | LV_STATE_DEFAULT);
 
-    /* Action buttons */
-    SET_CARD(btn_giro_automatico); SET_CARD(btn_start_demo);
-    SET_CARD(btn_stop_demo);       SET_CARD(btn_center);
+    /* Grilla de 6 botones de MODES */
+    SET_CARD(btn_giro_automatico);       SET_CARD(btn_start_demo);
+    SET_CARD(btn_stop_demo);             SET_CARD(btn_control_por_puntos);
+    SET_CARD(btn_config_auto_rotation);  SET_CARD(btn_stop_giro_automatico);
     TXT(obj23, th->txt_accent); TXT(obj24, th->txt_accent); TXT(obj25, th->txt_accent);
-    { lv_obj_t *l = lv_obj_get_child(objects.btn_center, 0);
-      if (l) lv_obj_set_style_text_color(l, th->txt_accent, LV_PART_MAIN | LV_STATE_DEFAULT); }
+    {
+        lv_obj_t *btns[3] = { objects.btn_control_por_puntos, objects.btn_config_auto_rotation, objects.btn_stop_giro_automatico };
+        for (int i = 0; i < 3; i++) {
+            lv_obj_t *l = lv_obj_get_child(btns[i], 0);
+            if (l) lv_obj_set_style_text_color(l, th->txt_accent, LV_PART_MAIN | LV_STATE_DEFAULT);
+        }
+    }
+    /* SET_CARD(btn_giro_automatico) recien lo dejo en el estilo neutro de
+     * siempre; si hay una reproduccion en curso, esto lo repinta de amarillo/
+     * accent (ver hmi_modes_giro_retheme, main.c). */
+    hmi_modes_giro_retheme();
+
+    /* Pantallas completas de sub-modo (Control por Puntos / Config Auto
+     * Rotation) — ver definiciones de theme_* mas abajo. */
+    theme_control_puntos_panel(objects.modes_control_puntos_panel);
+    theme_autorot_picker_panel(objects.modes_autorot_picker_panel);
+    theme_autorot_editor_panel(objects.modes_autorot_editor_panel);
 
     /* ---- 8. SETTINGS tab ---- */
     /* Nav column */
@@ -951,6 +1035,9 @@ static void apply_theme(int t) {
     /* Tecnologia panel (titulo, descripcion, y color PRESSED de los botones A/B) */
     theme_technology_panel(objects.settings_content_tecnologia);
 
+    /* Servo Limits panel */
+    theme_srv_limits_panel(objects.settings_content_srv_limits);
+
     /* ---- 9. SYSTEM INFO tab ---- */
     /* Nav column container (parent of the 4 sysinfo nav buttons) */
     lv_obj_t *si_nav_col = lv_obj_get_parent(objects.sysinfo_btn_device);
@@ -991,14 +1078,17 @@ static void apply_theme(int t) {
 
 void action_settings_theme_dark(lv_event_t *e) {
     apply_theme(0);
+    hmi_ui_prefs_save_theme(0);
 }
 
 void action_settings_theme_classic(lv_event_t *e) {
     apply_theme(1);
+    hmi_ui_prefs_save_theme(1);
 }
 
 void action_settings_theme_light(lv_event_t *e) {
     apply_theme(2);
+    hmi_ui_prefs_save_theme(2);
 }
 
 /* ---- Battery display mode ---- */
@@ -1011,6 +1101,7 @@ void action_settings_bat_voltage(lv_event_t *e) {
         lv_label_set_text(objects.robot_voltage, get_var_robot_voltage());
     if (objects.console_voltage)
         lv_label_set_text(objects.console_voltage, get_var_console_voltage());
+    hmi_ui_prefs_save_bat_display(0);
 }
 
 void action_settings_bat_percent(lv_event_t *e) {
@@ -1021,6 +1112,7 @@ void action_settings_bat_percent(lv_event_t *e) {
         lv_label_set_text(objects.robot_voltage, get_var_robot_voltage_percent());
     if (objects.console_voltage)
         lv_label_set_text(objects.console_voltage, get_var_console_voltage_percent());
+    hmi_ui_prefs_save_bat_display(1);
 }
 
 /* Public entry point — call once after create_screens() to boot the theme */
@@ -1046,6 +1138,8 @@ lv_color_t hmi_theme_txt_btn_inactive(void) { return g_theme.txt_btn_inactive; }
 lv_color_t hmi_theme_bg_btn_active(void)    { return g_theme.bg_btn_active; }
 lv_color_t hmi_theme_bd_btn_active(void)    { return g_theme.bd_btn_active; }
 lv_color_t hmi_theme_txt_btn_active(void)   { return g_theme.txt_btn_active; }
+lv_color_t hmi_theme_bd_card(void)          { return g_theme.bd_card; }
+lv_color_t hmi_theme_bg_topbar(void)        { return g_theme.bg_topbar; }
 
 /* Weak stub: main.c overrides this when DEV_MODE is defined */
 void __attribute__((weak)) hmi_dev_retheme(void) {}

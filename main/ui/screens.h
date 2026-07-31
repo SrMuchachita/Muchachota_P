@@ -68,7 +68,48 @@ typedef struct _objects_t {
     lv_obj_t *obj24;
     lv_obj_t *btn_stop_demo;
     lv_obj_t *obj25;
-    lv_obj_t *btn_center;
+    lv_obj_t *modes_neck_panel;
+    lv_obj_t *modes_head_panel;
+    lv_obj_t *modes_grid_panel;
+    lv_obj_t *btn_control_por_puntos;
+    lv_obj_t *btn_config_auto_rotation;
+    lv_obj_t *btn_stop_giro_automatico;
+    // Control por Puntos (pantalla completa, dentro de MODES) — reutiliza
+    // los paneles angle_neck/angle_head ORIGINALES via reparent, no crea
+    // copias nuevas (ver create_panel_modes_auto_rotation en screens.c).
+    // Barra superior fija (titulo + Volver) para que el boton de salir
+    // siempre este a la vista, sin depender de scroll.
+    lv_obj_t *modes_control_puntos_panel;
+    lv_obj_t *cp_title_label;
+    lv_obj_t *cp_btn_guardar_centrado;
+    lv_obj_t *cp_btn_volver;
+    // Config Auto Rotation — selector de recorrido (pantalla completa)
+    lv_obj_t *modes_autorot_picker_panel;
+    lv_obj_t *autorot_picker_title_label;
+    lv_obj_t *autorot_picker_subtitle_label;
+    lv_obj_t *autorot_btn_recorrido1;
+    lv_obj_t *autorot_btn_recorrido2;
+    lv_obj_t *autorot_picker_btn_volver;
+    // Config Auto Rotation — editor de puntos (pantalla completa)
+    lv_obj_t *modes_autorot_editor_panel;
+    lv_obj_t *ar_title_label;
+    lv_obj_t *ar_btn_volver;
+    lv_obj_t *ar_points_list;
+    lv_obj_t *ar_telemetry_neck_label;
+    lv_obj_t *ar_telemetry_head_label;
+    lv_obj_t *ar_speed_caption_label;
+    lv_obj_t *ar_speed_btn_decrease;
+    lv_obj_t *ar_speed_label;
+    lv_obj_t *ar_speed_btn_increase;
+    lv_obj_t *ar_angle_neck_btn_decrese;
+    lv_obj_t *ar_angle_neck_label;
+    lv_obj_t *ar_angle_neck_btn_increased;
+    lv_obj_t *ar_angle_head_btn_decrese;
+    lv_obj_t *ar_angle_head_label;
+    lv_obj_t *ar_angle_head_btn_increased;
+    lv_obj_t *ar_btn_guardar_punto;
+    lv_obj_t *ar_btn_eliminar_punto;
+    lv_obj_t *ar_btn_probar;
     lv_obj_t *configuracion;
     lv_obj_t *obj26;
     lv_obj_t *bluetooth_password_label;
@@ -96,6 +137,13 @@ typedef struct _objects_t {
     lv_obj_t *update_available_btn;
     lv_obj_t *update_duration_note;
     lv_obj_t *update_network_label;
+    // System Info > Update — estado de la consola (recibido por UART, no
+    // confundir con update_* de arriba que es el WiFi/OTA de la PANTALLA)
+    lv_obj_t *console_ota_led;
+    lv_obj_t *console_ota_status_label;
+    lv_obj_t *console_fw_version_label;
+    lv_obj_t *console_wifi_led;
+    lv_obj_t *console_wifi_toggle_btn;
     lv_obj_t *sysinfo_robot_serial_value;
     lv_obj_t *sysinfo_console_serial_value;
     lv_obj_t *sysinfo_device_name_value;
@@ -130,6 +178,27 @@ typedef struct _objects_t {
     lv_obj_t *tech_btn_b;
     lv_obj_t *tech_desc_a;
     lv_obj_t *tech_desc_b;
+    lv_obj_t *settings_btn_srv_limits;
+    lv_obj_t *settings_content_srv_limits;
+    lv_obj_t *sl_srv1_min_btn_decrese;
+    lv_obj_t *sl_srv1_min_label;
+    lv_obj_t *sl_srv1_min_btn_increased;
+    lv_obj_t *sl_srv1_max_btn_decrese;
+    lv_obj_t *sl_srv1_max_label;
+    lv_obj_t *sl_srv1_max_btn_increased;
+    lv_obj_t *sl_srv2_min_btn_decrese;
+    lv_obj_t *sl_srv2_min_label;
+    lv_obj_t *sl_srv2_min_btn_increased;
+    lv_obj_t *sl_srv2_max_btn_decrese;
+    lv_obj_t *sl_srv2_max_label;
+    lv_obj_t *sl_srv2_max_btn_increased;
+    lv_obj_t *sl_srv3_min_btn_decrese;
+    lv_obj_t *sl_srv3_min_label;
+    lv_obj_t *sl_srv3_min_btn_increased;
+    lv_obj_t *sl_srv3_max_btn_decrese;
+    lv_obj_t *sl_srv3_max_label;
+    lv_obj_t *sl_srv3_max_btn_increased;
+    lv_obj_t *sl_btn_guardar;
     lv_obj_t *ota_progress_overlay;
     lv_obj_t *ota_progress_label;
 } objects_t;
@@ -153,6 +222,8 @@ void create_panel_sysinfo_update();
 void create_panel_settings_theme_battery_lang_user();
 void create_panel_sysinfo_version_guide();
 void create_panel_settings_tecnologia();
+void create_panel_modes_auto_rotation();
+void create_panel_settings_srv_limits();
 // Overlay pantalla completa "Actualizando..." mostrado durante la descarga
 // OTA (ver ota_before_download_cb en main.c). Oculto por defecto.
 void create_ota_progress_overlay();

@@ -16,10 +16,8 @@ extern void action_angle_head_btn_decreased(lv_event_t * e);
 extern void action_angle_head_btn_increased(lv_event_t * e);
 extern void action_console_brightness_changed(lv_event_t * e);
 extern void action_console_brightness_released(lv_event_t * e);
-extern void action_btn_giro_automatico(lv_event_t * e);
 extern void action_btn_start_demo(lv_event_t * e);
 extern void action_btn_stop_demo(lv_event_t * e);
-extern void action_btn_center(lv_event_t * e);
 extern void action_angle_neck_btn_decreased_pressing(lv_event_t * e);
 extern void action_angle_neck_btn_increased_pressing(lv_event_t * e);
 extern void action_angle_head_btn_decreased_pressing(lv_event_t * e);
@@ -49,6 +47,7 @@ extern void action_settings_toggle_lock_pin(lv_event_t *e);
 extern void action_settings_btn_encoder(lv_event_t *e);
 extern void action_sysinfo_btn_update(lv_event_t *e);
 extern void action_settings_btn_tecnologia(lv_event_t *e);
+extern void action_settings_btn_srv_limits(lv_event_t *e);
 extern void action_settings_video_tech_press(lv_event_t *e);
 extern void action_settings_video_tech_release(lv_event_t *e);
 extern void action_settings_video_tech_b_press(lv_event_t *e);
@@ -57,6 +56,12 @@ extern void action_settings_video_tech_b_release(lv_event_t *e);
 /* Override en main.c: reaplica el color activo/inactivo del boton toggle de
  * WiFi (y el color del label de estado) cuando cambia el tema. */
 extern void hmi_update_panel_retheme(void);
+
+/* Override en main.c: reaplica el resaltado amarillo/activo del boton
+ * "Iniciar Giro Automatico" de MODES cuando cambia el tema, si hay una
+ * reproduccion en curso (moviendo/reproduciendo/pausado) — sin esto el
+ * SET_CARD generico de la grilla lo pisaria con el color neutro. */
+extern void hmi_modes_giro_retheme(void);
 
 /* Theme initializer — call once after create_screens() */
 extern void hmi_theme_apply(int theme);
@@ -73,6 +78,8 @@ extern lv_color_t hmi_theme_txt_btn_inactive(void);
 extern lv_color_t hmi_theme_bg_btn_active(void);
 extern lv_color_t hmi_theme_bd_btn_active(void);
 extern lv_color_t hmi_theme_txt_btn_active(void);
+extern lv_color_t hmi_theme_bd_card(void);
+extern lv_color_t hmi_theme_bg_topbar(void);
 /* Override this to re-theme the DEV panel on theme change */
 extern void hmi_dev_retheme(void);
 

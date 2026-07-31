@@ -4,6 +4,7 @@
 #include "actions.h"
 #include "vars.h"
 #include "main.h"
+#include "lang.h"
 
 static int16_t currentScreen = -1;
 
@@ -34,9 +35,18 @@ void ui_init() {
     create_panel_settings_theme_battery_lang_user();
     create_panel_sysinfo_version_guide();
     create_panel_settings_tecnologia();
+    create_panel_modes_auto_rotation();
+    create_panel_settings_srv_limits();
     create_ota_progress_overlay();
     enc_settings_load_from_nvs();
-    hmi_theme_apply(1); /* Apply Classic theme to all widgets after screen creation */
+    hmi_auto_rotation_init(); /* carga NVS de recorridos/limites y arranca MODES en la vista home */
+    // Preferencias de UI guardadas (tema/idioma/modo de bateria): se cargan
+    // aca, antes de aplicar tema, para que un reinicio no vuelva siempre al
+    // default de fabrica (Classic/ES/voltaje).
+    lang_set((lang_id_t)hmi_ui_prefs_load_lang());
+    lang_apply();
+    g_bat_display_percent = (uint8_t)hmi_ui_prefs_load_bat_display();
+    hmi_theme_apply(hmi_ui_prefs_load_theme()); /* aplica tema + reflejalo en los botones de bateria/idioma */
     loadScreen(SCREEN_ID_MAIN);
 }
 

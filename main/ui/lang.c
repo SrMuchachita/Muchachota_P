@@ -18,11 +18,34 @@ static const lang_strings_t s_es = {
     .lbl_angle_y        = "Angulo Y",
     .sec_neck           = " ANGULO CUELLO",
     .sec_head           = " ANGULO CABEZA",
-    .btn_auto_rotation  = "AUTO\nROTACION",
+    .btn_auto_rotation  = "INICIAR GIRO\nAUTOMATICO",
     .btn_start_demo     = "INICIAR DEMO",
     .btn_stop_demo      = "DETENER DEMO",
-    .btn_center         = "CENTRAR",
     .btn_reset          = "RESET",
+    .btn_control_puntos       = "CONTROL POR\nPUNTOS",
+    .btn_config_auto_rotation = "CONFIG AUTO\nROTATION",
+    .btn_stop_auto_rotation   = "STOP GIRO\nAUTOMATICO",
+    .btn_pausar_auto_rotation = "PAUSAR",
+    .btn_reanudar_auto_rotation = "REANUDAR",
+    .title_control_puntos     = " CONTROL POR PUNTOS",
+    .lbl_neck_servo2          = "Cuello (Servo 2):",
+    .lbl_head_servo1          = "Cabeza (Servo 1):",
+    .btn_guardar_centrado     = LV_SYMBOL_SAVE " Guardar centrado nuevo",
+    .btn_volver               = LV_SYMBOL_LEFT " Volver",
+    .title_config_auto_rotation = " CONFIG AUTO ROTATION",
+    .sub_elegir_recorrido     = "Elegi el recorrido a editar:",
+    .btn_recorrido1           = "Recorrido 1",
+    .btn_recorrido2           = "Recorrido 2",
+    .btn_guardar_punto        = LV_SYMBOL_SAVE " Guardar punto",
+    .lbl_velocidad            = "VELOCIDAD",
+    .btn_probar               = LV_SYMBOL_PLAY " Test",
+    .btn_detener_prueba       = LV_SYMBOL_STOP " Detener",
+    .nav_srv_limits           = "Limites Servo",
+    .title_srv_limits         = " LIMITES DE SERVO",
+    .desc_srv_limits          = "Rango de movimiento de cada servo (0-270 grados)",
+    .lbl_minimo               = "Min.",
+    .lbl_maximo               = "Max.",
+    .btn_guardar_limites      = "Guardar limites",
     .nav_brightness     = "Brillo",
     .nav_theme          = "Tema",
     .nav_battery        = "Bateria",
@@ -69,6 +92,13 @@ static const lang_strings_t s_es = {
     .title_dev_mode          = "MODO DESARROLLADOR",
     .sub_change_pin          = "Ingresa el nuevo PIN de 4 digitos",
     .sub_enter_pin           = "Ingresa el PIN para continuar",
+    .title_new_lock_pin      = "NUEVO PIN DE BLOQUEO",
+    .sub_lock_pin_digits     = "4 digitos",
+    .lbl_lock_greeting_prefix= "HOLA %s",
+    .lbl_lock_signing_in     = "Ingresando...",
+    .lbl_lock_access_granted = "Acceso concedido",
+    .lbl_lock_pin_incorrect  = "PIN incorrecto",
+    .lbl_lock_tap_to_enter   = "Toca para ingresar",
     .nav_encoder             = "Encoder",
     .title_encoder           = " ENCODER",
     .desc_encoder            = "Perimetro del rodillo del encoder. Formula: Dist.(m) = Pulsos x Perimetro / 1000  |  Default: 85.20 mm",
@@ -92,7 +122,7 @@ static const lang_strings_t s_es = {
     .lbl_updating            = "Actualizando...",
     .lbl_network_prefix      = "Red: ",
     .lbl_update_duration_note = "La actualizacion puede demorar aproximadamente 35 segundos",
-    .btn_pulses              = "PULSOS",
+    .btn_feet                = "PIES",
     .btn_meters              = "METROS",
 };
 
@@ -115,8 +145,31 @@ static const lang_strings_t s_en = {
     .btn_auto_rotation  = "START AUTO\nROTATION",
     .btn_start_demo     = "START DEMO",
     .btn_stop_demo      = "STOP DEMO",
-    .btn_center         = "CENTER",
     .btn_reset          = "RESET",
+    .btn_control_puntos       = "POINT\nCONTROL",
+    .btn_config_auto_rotation = "CONFIG AUTO\nROTATION",
+    .btn_stop_auto_rotation   = "STOP AUTO\nROTATION",
+    .btn_pausar_auto_rotation = "PAUSE",
+    .btn_reanudar_auto_rotation = "RESUME",
+    .title_control_puntos     = " POINT CONTROL",
+    .lbl_neck_servo2          = "Neck (Servo 2):",
+    .lbl_head_servo1          = "Head (Servo 1):",
+    .btn_guardar_centrado     = LV_SYMBOL_SAVE " Save new center",
+    .btn_volver               = LV_SYMBOL_LEFT " Back",
+    .title_config_auto_rotation = " CONFIG AUTO ROTATION",
+    .sub_elegir_recorrido     = "Choose the route to edit:",
+    .btn_recorrido1           = "Route 1",
+    .btn_recorrido2           = "Route 2",
+    .btn_guardar_punto        = LV_SYMBOL_SAVE " Save point",
+    .lbl_velocidad            = "SPEED",
+    .btn_probar               = LV_SYMBOL_PLAY " Test",
+    .btn_detener_prueba       = LV_SYMBOL_STOP " Stop",
+    .nav_srv_limits           = "Servo Limits",
+    .title_srv_limits         = " SERVO LIMITS",
+    .desc_srv_limits          = "Range of motion for each servo (0-270 degrees)",
+    .lbl_minimo               = "Min.",
+    .lbl_maximo               = "Max.",
+    .btn_guardar_limites      = "Save limits",
     .nav_brightness     = "Brightness",
     .nav_theme          = "Theme",
     .nav_battery        = "Battery",
@@ -163,6 +216,13 @@ static const lang_strings_t s_en = {
     .title_dev_mode          = "DEVELOPER MODE",
     .sub_change_pin          = "Enter the new 4-digit PIN",
     .sub_enter_pin           = "Enter the PIN to continue",
+    .title_new_lock_pin      = "NEW LOCK PIN",
+    .sub_lock_pin_digits     = "4 digits",
+    .lbl_lock_greeting_prefix= "HELLO %s",
+    .lbl_lock_signing_in     = "Signing in...",
+    .lbl_lock_access_granted = "Access granted",
+    .lbl_lock_pin_incorrect  = "Incorrect PIN",
+    .lbl_lock_tap_to_enter   = "Tap to enter",
     .nav_encoder             = "Encoder",
     .title_encoder           = " ENCODER",
     .desc_encoder            = "Encoder roller perimeter. Formula: Dist.(m) = Pulses x Perimeter / 1000  |  Default: 85.20 mm",
@@ -186,7 +246,7 @@ static const lang_strings_t s_en = {
     .lbl_updating            = "Updating...",
     .lbl_network_prefix      = "Network: ",
     .lbl_update_duration_note = "The update may take approximately 35 seconds",
-    .btn_pulses              = "PULSES",
+    .btn_feet                = "FEET",
     .btn_meters              = "METERS",
 };
 
@@ -206,11 +266,34 @@ static const lang_strings_t s_pt = {
     .lbl_angle_y        = "Angulo Y",
     .sec_neck           = " ANGULO PESCOCO",
     .sec_head           = " ANGULO CABECA",
-    .btn_auto_rotation  = "AUTO\nROTACAO",
+    .btn_auto_rotation  = "INICIAR ROTACAO\nAUTOMATICA",
     .btn_start_demo     = "INICIAR DEMO",
     .btn_stop_demo      = "PARAR DEMO",
-    .btn_center         = "CENTRALIZAR",
     .btn_reset          = "RESET",
+    .btn_control_puntos       = "CONTROLE POR\nPONTOS",
+    .btn_config_auto_rotation = "CONFIG ROTACAO\nAUTOMATICA",
+    .btn_stop_auto_rotation   = "PARAR ROTACAO\nAUTOMATICA",
+    .btn_pausar_auto_rotation = "PAUSAR",
+    .btn_reanudar_auto_rotation = "RETOMAR",
+    .title_control_puntos     = " CONTROLE POR PONTOS",
+    .lbl_neck_servo2          = "Pescoco (Servo 2):",
+    .lbl_head_servo1          = "Cabeca (Servo 1):",
+    .btn_guardar_centrado     = LV_SYMBOL_SAVE " Salvar novo centro",
+    .btn_volver               = LV_SYMBOL_LEFT " Voltar",
+    .title_config_auto_rotation = " CONFIG ROTACAO AUTOMATICA",
+    .sub_elegir_recorrido     = "Escolha o percurso a editar:",
+    .btn_recorrido1           = "Percurso 1",
+    .btn_recorrido2           = "Percurso 2",
+    .btn_guardar_punto        = LV_SYMBOL_SAVE " Salvar ponto",
+    .lbl_velocidad            = "VELOCIDADE",
+    .btn_probar               = LV_SYMBOL_PLAY " Testar",
+    .btn_detener_prueba       = LV_SYMBOL_STOP " Parar",
+    .nav_srv_limits           = "Limites Servo",
+    .title_srv_limits         = " LIMITES DE SERVO",
+    .desc_srv_limits          = "Faixa de movimento de cada servo (0-270 graus)",
+    .lbl_minimo               = "Min.",
+    .lbl_maximo               = "Max.",
+    .btn_guardar_limites      = "Salvar limites",
     .nav_brightness     = "Brilho",
     .nav_theme          = "Tema",
     .nav_battery        = "Bateria",
@@ -257,6 +340,13 @@ static const lang_strings_t s_pt = {
     .title_dev_mode          = "MODO DESENVOLVEDOR",
     .sub_change_pin          = "Digite o novo PIN de 4 digitos",
     .sub_enter_pin           = "Digite o PIN para continuar",
+    .title_new_lock_pin      = "NOVO PIN DE BLOQUEIO",
+    .sub_lock_pin_digits     = "4 digitos",
+    .lbl_lock_greeting_prefix= "OLA %s",
+    .lbl_lock_signing_in     = "Entrando...",
+    .lbl_lock_access_granted = "Acesso concedido",
+    .lbl_lock_pin_incorrect  = "PIN incorreto",
+    .lbl_lock_tap_to_enter   = "Toque para entrar",
     .nav_encoder             = "Encoder",
     .title_encoder           = " ENCODER",
     .desc_encoder            = "Perimetro do rolete do encoder. Formula: Dist.(m) = Pulsos x Perimetro / 1000  |  Padrao: 85.20 mm",
@@ -280,7 +370,7 @@ static const lang_strings_t s_pt = {
     .lbl_updating            = "Atualizando...",
     .lbl_network_prefix      = "Rede: ",
     .lbl_update_duration_note = "A atualizacao pode demorar aproximadamente 35 segundos",
-    .btn_pulses              = "PULSOS",
+    .btn_feet                = "PES",
     .btn_meters              = "METROS",
 };
 
@@ -330,12 +420,57 @@ void lang_apply(void) {
     LBL(objects.obj20, L->sec_neck);
     LBL(objects.obj22, L->sec_head);
 
-    /* Modes - action button labels (obj23/24/25 are the label objects directly) */
+    /* Modes - grilla 2x3 (obj23/24/25 son los labels directos de giro
+     * automatico/start demo/stop demo; el texto de giro automatico durante
+     * Pausar/Reanudar lo pisa hmi_extra_panels_apply_lang() en main.c segun
+     * el estado de reproduccion). */
     LBL(objects.obj23, L->btn_auto_rotation);
     LBL(objects.obj24, L->btn_start_demo);
     LBL(objects.obj25, L->btn_stop_demo);
-    CLBL(objects.btn_center,        L->btn_center);
+    CLBL(objects.btn_control_por_puntos,      L->btn_control_puntos);
+    CLBL(objects.btn_config_auto_rotation,    L->btn_config_auto_rotation);
+    CLBL(objects.btn_stop_giro_automatico,    L->btn_stop_auto_rotation);
     CLBL(objects.btn_encoder_reset, L->btn_reset);
+
+    /* Modes - Control por Puntos (pantalla completa, barra superior fija).
+     * Los paneles cuello/cabeza que contiene son objects.obj19/obj21
+     * reubicados — sus titulos (obj20/obj22) ya se traducen arriba via
+     * L->sec_neck/L->sec_head. */
+    LBL(objects.cp_title_label, L->title_control_puntos);
+    CLBL(objects.cp_btn_guardar_centrado, L->btn_guardar_centrado);
+    CLBL(objects.cp_btn_volver,           L->btn_volver);
+
+    /* Modes - Config Auto Rotation: selector de recorrido */
+    LBL(objects.autorot_picker_title_label,    L->title_config_auto_rotation);
+    LBL(objects.autorot_picker_subtitle_label, L->sub_elegir_recorrido);
+    CLBL(objects.autorot_btn_recorrido1,      L->btn_recorrido1);
+    CLBL(objects.autorot_btn_recorrido2,      L->btn_recorrido2);
+    CLBL(objects.autorot_picker_btn_volver,   L->btn_volver);
+
+    /* Modes - Config Auto Rotation: editor de puntos (el titulo dinamico
+     * "Recorrido N" lo mantiene main.c al entrar/cambiar de recorrido; los
+     * captions "neck (servo 2)"/"head (servo 1)" y las etiquetas de
+     * telemetria quedan en ingles tecnico a proposito, como en el mockup). */
+    LBL(objects.ar_speed_caption_label, L->lbl_velocidad);
+    CLBL(objects.ar_btn_guardar_punto, L->btn_guardar_punto);
+    CLBL(objects.ar_btn_probar,        L->btn_probar);
+    CLBL(objects.ar_btn_volver,        L->btn_volver);
+
+    /* Settings - Servo Limits nav + panel (0=title,1=desc,2=encabezado,
+     * 3=fila minimo,4=fila maximo,5=guardar) */
+    CLBL(objects.settings_btn_srv_limits, L->nav_srv_limits);
+    if (objects.settings_content_srv_limits) {
+        lv_obj_t *panel = objects.settings_content_srv_limits;
+        lv_obj_t *title = lv_obj_get_child(panel, 0);
+        if (title) lv_label_set_text(title, L->title_srv_limits);
+        lv_obj_t *desc = lv_obj_get_child(panel, 1);
+        if (desc) lv_label_set_text(desc, L->desc_srv_limits);
+        lv_obj_t *min_row = lv_obj_get_child(panel, 3);
+        if (min_row) { lv_obj_t *key = lv_obj_get_child(min_row, 0); if (key) lv_label_set_text(key, L->lbl_minimo); }
+        lv_obj_t *max_row = lv_obj_get_child(panel, 4);
+        if (max_row) { lv_obj_t *key = lv_obj_get_child(max_row, 0); if (key) lv_label_set_text(key, L->lbl_maximo); }
+    }
+    CLBL(objects.sl_btn_guardar, L->btn_guardar_limites);
 
     /* Settings - nav buttons */
     CLBL(objects.settings_btn_brightness, L->nav_brightness);

@@ -24,8 +24,33 @@ typedef struct {
     const char *btn_auto_rotation;
     const char *btn_start_demo;
     const char *btn_stop_demo;
-    const char *btn_center;
     const char *btn_reset;
+    /* Modes - grilla: Control por Puntos / Config Auto Rotation */
+    const char *btn_control_puntos;
+    const char *btn_config_auto_rotation;
+    const char *btn_stop_auto_rotation;
+    const char *btn_pausar_auto_rotation;
+    const char *btn_reanudar_auto_rotation;
+    const char *title_control_puntos;
+    const char *lbl_neck_servo2;
+    const char *lbl_head_servo1;
+    const char *btn_guardar_centrado;
+    const char *btn_volver;
+    const char *title_config_auto_rotation;
+    const char *sub_elegir_recorrido;
+    const char *btn_recorrido1;
+    const char *btn_recorrido2;
+    const char *btn_guardar_punto;
+    const char *lbl_velocidad;
+    const char *btn_probar;
+    const char *btn_detener_prueba;
+    /* Settings - Servo Limits */
+    const char *nav_srv_limits;
+    const char *title_srv_limits;
+    const char *desc_srv_limits;
+    const char *lbl_minimo;
+    const char *lbl_maximo;
+    const char *btn_guardar_limites;
     /* Settings - nav buttons */
     const char *nav_brightness;
     const char *nav_theme;
@@ -76,6 +101,14 @@ typedef struct {
     const char *title_dev_mode;
     const char *sub_change_pin;
     const char *sub_enter_pin;
+    /* Lock screen (login) + its own "new lock PIN" editor */
+    const char *title_new_lock_pin;
+    const char *sub_lock_pin_digits;
+    const char *lbl_lock_greeting_prefix; /* placeholder: %s = nombre del dispositivo */
+    const char *lbl_lock_signing_in;
+    const char *lbl_lock_access_granted;
+    const char *lbl_lock_pin_incorrect;
+    const char *lbl_lock_tap_to_enter;
     /* Settings - Encoder panel */
     const char *nav_encoder;
     const char *title_encoder;
@@ -102,8 +135,8 @@ typedef struct {
     const char *lbl_updating;
     const char *lbl_network_prefix;
     const char *lbl_update_duration_note;
-    /* General Controls - Encoder card pulses/meters toggle */
-    const char *btn_pulses;
+    /* General Controls - Encoder card feet/meters toggle */
+    const char *btn_feet;
     const char *btn_meters;
 } lang_strings_t;
 
