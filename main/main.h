@@ -43,6 +43,14 @@ typedef enum
     HMI_REG_VIDEO_TECH          = 0x21, // Tecnologia de video, boton A: 1 = prender LED en la placa de consola, 0 = apagar
     HMI_REG_VIDEO_TECH_B        = 0x22, // Tecnologia de video, boton B: 1 = prender LED en la placa de consola, 0 = apagar
     HMI_REG_WIFI_ENABLE         = 0x23, // HMI -> Consola: prender/apagar wifi de la consola (1/0)
+    HMI_REG_RL1                 = 0x24, // HMI -> Consola: 1=enciende RL1 (coil 0x0004 del robot), 0=apaga — se manda cuando el robot entra/sale de reversa
+    HMI_REG_ROBOT_MODEL         = 0x25, // Consola -> HMI: modelo del robot conectado: 0=RD80, 1=RD90, 2=RD100
+    HMI_REG_RL2                 = 0x26, // HMI -> Consola: 1=enciende RL2 (coil 0x0005 del robot), 0=apaga — se manda cuando el robot entra/sale de avance
+    HMI_REG_BLUETOOTH_MAC_HI    = 0x29, // Consola -> HMI: MAC BLE del dispositivo conectado, bits[15:0]=bytes 5-4
+    HMI_REG_BLUETOOTH_MAC_LO    = 0x2A, // Consola -> HMI: MAC BLE del dispositivo conectado, bytes 3-0 (llega despues de MAC_HI)
+    HMI_REG_BLUETOOTH_DISCONNECT = 0x2B, // HMI -> Consola: 1=desconecta el dispositivo BLE actual y vuelve a modo emparejamiento
+    HMI_REG_BLUETOOTH_BLOCK      = 0x2C, // HMI -> Consola: 1=bloquea (lista negra, max 5 MACs) y desconecta el dispositivo BLE actual
+    HMI_REG_BLUETOOTH_UNBLOCK_ALL = 0x2D, // HMI -> Consola: 1=borra toda la lista negra de MACs BLE bloqueadas
     HMI_CMD_MAX
 } hmi_reg_t;
 
@@ -52,6 +60,7 @@ void hmi_send_data(uint8_t reg, int32_t value);
 void lcd_set_brightness(int brightness_percent);
 void hmi_deactivate_dynamic_nav(void);
 void hmi_open_device_name_editor(void);
+void hmi_open_wifi_editor(void);
 void hmi_open_lock_pin_editor(void);
 void hmi_set_lock_enabled(bool enabled);
 bool hmi_get_lock_enabled(void);
@@ -72,6 +81,17 @@ extern uint8_t g_bat_display_percent;
 // Actualiza el valor crudo de pulsos del encoder y refresca su label en
 // GENERAL CONTROLS respetando el modo de visualizacion actual (pulsos/metros).
 void hmi_encoder_set_raw(int32_t raw_pulses);
+
+// Resetea la distancia mostrada a 0 y le avisa a la consola para que
+// resetee su propio contador — usar esto en vez de hmi_encoder_set_raw(0)
+// para cualquier boton/gesto de "reset" del encoder.
+void hmi_encoder_reset(void);
+
+// Refresca la barra de niveles (4 escalones) del panel de manejo segun el
+// brillo actual (get_var_brightness()) — llamar despues de cualquier
+// cambio de brillo del LED del robot, sea local (slider) o remoto
+// (HMI_REG_ROBOT_LED_CHANGED).
+void hmi_bigview_led_level_refresh(void);
 
 // Callbacks de los widgets de Settings>Encoder y SystemInfo>Update — los
 // widgets ahora se crean en ui/screens.c (junto con los demas submenus),

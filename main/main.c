@@ -1,11 +1,13 @@
 // ANSI C
 #include <stdio.h>
+#include <stdlib.h>
 #include <stdbool.h>
 #include <unistd.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
 #include <inttypes.h>
+#include <math.h>
 
 // FreeRTOS
 #include "freertos/FreeRTOS.h"
@@ -20,6 +22,7 @@
 #include "driver/i2c_master.h"
 #include "driver/uart.h"
 #include "esp_timer.h"
+#include "esp_random.h"
 #include "esp_log.h"
 #include "esp_err.h"
 #include "esp_check.h"
@@ -39,6 +42,11 @@
 #include "ui/lang.h"
 #include "ui/vars.h"
 #include "ui/images.h" // <-- agregado
+
+// Fuente propia para el numero grande del panel de manejo (main/ui/font_distance.c).
+// Nombre de archivo/simbolo FIJO a proposito: para cambiar el tamano solo se
+// regenera el contenido de ese mismo archivo (no hace falta Full Clean).
+LV_FONT_DECLARE(lv_font_distance);
 
 // WiFi / OTA
 #include "esp_wifi.h"
@@ -151,6 +159,7 @@ void vHardwareInit(void);
 void hmi_send_data(uint8_t reg, int32_t value);
 void hmi_process_buffer(uint8_t *buffer, uint16_t len);
 void hmi_handle_reg(uint8_t reg, int32_t value);
+void hmi_reapply_cached_boot_regs(void);
 static inline uint8_t battery_percent(uint16_t mv);
 static uint32_t hmi_get_boot_count(void);
 static void     hmi_log_refresh(void);
@@ -181,8 +190,19 @@ static int  dev_uart_rx_pin(void);
 static void dev_serial_add(const char *dir, const char *msg);
 static void dev_joy_log_update(void);
 static void encoder_display_toggle_create(void);
+static void encoder_bigview_create(void);
+static void bigview_angle_trace_push(float angle_deg, float delta_dist_m);
+static void logo_secret_button_wire(void);
+static void camera_rl1_mode_wire(void);
+static void encoder_toggle_retheme(void);
+static void console_wifi_ui_refresh(void);
 static void settings_nav_enable_scroll(void);
 static void hmi_wifi_set_enabled(bool enable);
+static void dev_nvs_read_wifi_ssid(char *out, size_t max);
+static void dev_nvs_write_wifi_ssid(const char *ssid);
+static void dev_nvs_read_wifi_pass(char *out, size_t max);
+static void dev_nvs_write_wifi_pass(const char *pass);
+static void wifi_settings_ui_init(void);
 #ifdef LOCK_SCREEN_ENABLE
 static void lock_screen_create(void);
 static SemaphoreHandle_t s_ls_sem        = NULL;
@@ -292,6 +312,8 @@ static const st7701_lcd_init_cmd_t lcd_cmd[] = {
 /*****************************************************************************************************/
 #define WIFI_SSID "WTP TALLER"
 #define WIFI_PASS "24012024"
+#define WIFI_SSID_MAX 32
+#define WIFI_PASS_MAX 64
 
 #define OTA_VERSION_URL  "https://raw.githubusercontent.com/SrMuchachita/Muchachota_P/main/version.json"
 #define OTA_FIRMWARE_URL "https://github.com/SrMuchachita/Muchachota_P/releases/latest/download/WP_P_V9_UP.bin"
@@ -303,24 +325,97 @@ static const st7701_lcd_init_cmd_t lcd_cmd[] = {
 // crean en ui/screens.c junto con el resto de System Info.
 static bool s_wifi_initialized = false; // wifi_init() ya corrio alguna vez
 static bool s_wifi_enabled     = false; // estado logico actual (on/off)
+static bool s_ota_configured   = false; // ota_http_start() ya corrio alguna vez — separado de
+                                         // s_wifi_initialized porque el escaneo/verificacion del
+                                         // editor de WiFi puede inicializar el driver ANTES de que
+                                         // el usuario toque "Activar WiFi" por primera vez.
+
+// true si fue el editor de WiFi (no el boton "Activar WiFi" de Update) quien
+// prendio el radio — para: 1) que wifi_event_handler NO auto-conecte a la
+// red vieja guardada en STA_START (chocaria con esp_wifi_scan_start(), que
+// falla con "still connecting"), y 2) saber si hay que apagar el radio de
+// nuevo (y sincronizar el boton "Activar WiFi") al terminar de escanear.
+// Ver wifi_editor_ensure_radio_on()/wifi_editor_close().
+static bool s_wifi_enabled_by_editor = false;
+
+// true mientras el editor de WiFi "tiene prestado" el radio para escanear:
+// el WiFi de actualizacion, una vez activado, reintenta conectarse solo a la
+// red guardada en el fondo (STA_DISCONNECTED -> esp_wifi_connect()) — si
+// esa red no esta al alcance, el radio queda "conectando" casi todo el
+// tiempo, y esp_wifi_scan_start() falla justo en ese estado ("still
+// connecting"). Mientras esto este en true, wifi_event_handler() NO
+// reintenta conectar solo; wifi_editor_scan_done() lo apaga y retoma el
+// intento normal cuando el escaneo termina.
+static bool s_wifi_scan_active = false;
+
+// LED de "Activar WiFi" (System Info > Update): apagado si el WiFi esta
+// apagado, PARPADEANDO si esta prendido pero todavia no consiguio conectarse
+// a ninguna red, SOLIDO si ya esta conectado.
+typedef enum {
+    UPDATE_LED_OFF = 0,
+    UPDATE_LED_BLINK,
+    UPDATE_LED_SOLID,
+} update_led_mode_t;
+
+static lv_timer_t *s_update_led_blink_timer = NULL;
+static bool        s_update_led_blink_on    = false;
+
+static void update_led_blink_cb(lv_timer_t *t)
+{
+    (void)t;
+    s_update_led_blink_on = !s_update_led_blink_on;
+    if (objects.update_led) lv_led_set_brightness(objects.update_led, s_update_led_blink_on ? 255 : 0);
+}
+
+static void update_led_set_mode(update_led_mode_t mode)
+{
+    if (mode == UPDATE_LED_BLINK) {
+        if (!s_update_led_blink_timer) {
+            s_update_led_blink_on = false;
+            s_update_led_blink_timer = lv_timer_create(update_led_blink_cb, 500, NULL);
+        }
+        return; // el timer se encarga del brillo mientras dura este modo
+    }
+    if (s_update_led_blink_timer) { lv_timer_delete(s_update_led_blink_timer); s_update_led_blink_timer = NULL; }
+    if (objects.update_led) lv_led_set_brightness(objects.update_led, mode == UPDATE_LED_SOLID ? 255 : 0);
+}
+
+// Muestra/oculta la fila "SSID guardado + Buscar redes" — solo tiene sentido
+// tocarla cuando el WiFi esta activado (ver hmi_wifi_set_enabled()).
+static void update_wifi_network_row_set_visible(bool visible)
+{
+    if (!objects.update_wifi_network_row) return;
+    if (visible) lv_obj_remove_flag(objects.update_wifi_network_row, LV_OBJ_FLAG_HIDDEN);
+    else         lv_obj_add_flag(objects.update_wifi_network_row, LV_OBJ_FLAG_HIDDEN);
+}
 
 // Sin lock: se llama tanto desde contexto LVGL (click del boton toggle) como,
 // via HMI_LV_LOCKED, desde wifi_event_handler (tarea del event loop de ESP-IDF).
-static void update_panel_set_status(const char *text, bool led_on)
+static void update_panel_set_status(const char *text, update_led_mode_t led_mode)
 {
     if (objects.update_status_label) lv_label_set_text(objects.update_status_label, text);
-    if (objects.update_led) lv_led_set_brightness(objects.update_led, led_on ? 255 : 0);
+    update_led_set_mode(led_mode);
 }
 
-// "Network: WTP TALLER" solo tiene sentido mostrarlo cuando el WiFi esta
+// "Network: <SSID>" solo tiene sentido mostrarlo cuando el WiFi esta
 // realmente conectado (con IP) — antes de eso (apagado, conectando,
 // reconectando) queda oculto. Sin lock: mismo patron que
-// update_panel_set_status().
+// update_panel_set_status(). El texto se arma con el SSID GUARDADO en NVS
+// (el que se uso para conectar), no un nombre fijo — antes decia siempre
+// "WTP TALLER" aunque el usuario hubiera cambiado de red desde el editor.
 static void update_network_label_set_visible(bool visible)
 {
     if (!objects.update_network_label) return;
-    if (visible) lv_obj_remove_flag(objects.update_network_label, LV_OBJ_FLAG_HIDDEN);
-    else         lv_obj_add_flag(objects.update_network_label, LV_OBJ_FLAG_HIDDEN);
+    if (visible) {
+        char cur_ssid[WIFI_SSID_MAX];
+        dev_nvs_read_wifi_ssid(cur_ssid, sizeof(cur_ssid));
+        char buf[48];
+        snprintf(buf, sizeof(buf), "%s%s", g_lang->lbl_network_prefix, cur_ssid[0] ? cur_ssid : WIFI_SSID);
+        lv_label_set_text(objects.update_network_label, buf);
+        lv_obj_remove_flag(objects.update_network_label, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(objects.update_network_label, LV_OBJ_FLAG_HIDDEN);
+    }
 }
 
 // Pone el boton "Actualizar" en amarillo con la version nueva, y lo muestra.
@@ -425,23 +520,45 @@ void update_confirm_cb(lv_event_t *e)
     ota_http_confirm_update();
 }
 
+// Definidas junto con el editor de WiFi (Settings/Update > Editar), mas
+// abajo en este archivo — declaradas aca porque wifi_event_handler() (el
+// unico event handler de WIFI_EVENT/IP_EVENT que existe) necesita llamarlas.
+static void wifi_editor_scan_done(void);
+
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                                 int32_t event_id, void *event_data)
 {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        esp_wifi_connect();
-        HMI_LV_LOCKED({
-            update_panel_set_status(g_lang->lbl_connecting, false);
-            update_network_label_set_visible(false);
-        });
+        // El editor de WiFi (escaneo/verificacion) prende el radio por el
+        // mismo camino que el boton "Activar WiFi" (hmi_wifi_set_enabled,
+        // ver wifi_editor_ensure_radio_on()), para que el boton quede
+        // sincronizado. Pero si fue el editor quien lo prendio
+        // (s_wifi_enabled_by_editor), NO auto-conectar a la red vieja
+        // guardada aca — esp_wifi_scan_start() falla con "still connecting"
+        // si hay un intento de conexion en curso, y el editor conecta a
+        // mano, explicitamente, recien cuando el usuario elige una red.
+        if (s_wifi_enabled && !s_wifi_enabled_by_editor) {
+            esp_wifi_connect();
+            HMI_LV_LOCKED({
+                update_panel_set_status(g_lang->lbl_connecting, UPDATE_LED_BLINK);
+                update_network_label_set_visible(false);
+            });
+        }
+    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_SCAN_DONE) {
+        HMI_LV_LOCKED(wifi_editor_scan_done());
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        // Si el usuario apago el WiFi a proposito (hmi_wifi_set_enabled(false)
-        // ya hizo esp_wifi_disconnect()), no reintentar ni pisar el estado "apagado".
-        if (s_wifi_enabled) {
+        if (s_wifi_scan_active) {
+            // Desconexion a proposito, pedida por el editor para poder
+            // escanear (esp_wifi_scan_start() falla si hay un intento de
+            // conexion en curso) — no reintentar aca, wifi_editor_scan_done()
+            // retoma el intento normal cuando el escaneo termina.
+        } else if (s_wifi_enabled) {
+            // Si el usuario apago el WiFi a proposito (hmi_wifi_set_enabled(false)
+            // ya hizo esp_wifi_disconnect()), no reintentar ni pisar el estado "apagado".
             ESP_LOGW(TAG, "WiFi desconectado, reintentando...");
             esp_wifi_connect();
             HMI_LV_LOCKED({
-                update_panel_set_status(g_lang->lbl_reconnecting, false);
+                update_panel_set_status(g_lang->lbl_reconnecting, UPDATE_LED_BLINK);
                 update_network_label_set_visible(false);
             });
         }
@@ -452,7 +569,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         char buf[48];
         snprintf(buf, sizeof(buf), "%s" IPSTR, g_lang->lbl_connected_prefix, IP2STR(&event->ip_info.ip));
         HMI_LV_LOCKED({
-            update_panel_set_status(buf, true);
+            update_panel_set_status(buf, UPDATE_LED_SOLID);
             update_network_label_set_visible(true);
         });
     }
@@ -503,15 +620,35 @@ static void wifi_init(void)
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL));
 
-    wifi_config_t wifi_config = {
-        .sta = {
-            .ssid = WIFI_SSID,
-            .password = WIFI_PASS,
-        },
-    };
+    // SSID/contrasena guardados a mano en Settings > WiFi tienen prioridad;
+    // si nunca se guardo nada, usa los fijos del codigo como antes.
+    char saved_ssid[WIFI_SSID_MAX] = "";
+    char saved_pass[WIFI_PASS_MAX] = "";
+    dev_nvs_read_wifi_ssid(saved_ssid, sizeof(saved_ssid));
+    dev_nvs_read_wifi_pass(saved_pass, sizeof(saved_pass));
+
+    wifi_config_t wifi_config = {0};
+    strncpy((char *)wifi_config.sta.ssid, saved_ssid[0] ? saved_ssid : WIFI_SSID, sizeof(wifi_config.sta.ssid) - 1);
+    strncpy((char *)wifi_config.sta.password, saved_pass[0] ? saved_pass : WIFI_PASS, sizeof(wifi_config.sta.password) - 1);
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
+}
+
+// Inicializa el driver WiFi la primera vez que hace falta (guardado por
+// s_wifi_initialized, wifi_init() sigue corriendo una sola vez en toda la
+// vida del programa) y se asegura de que este prendido. La usan tanto el
+// WiFi "de actualizacion" (hmi_wifi_set_enabled) como el escaneo/verificacion
+// del editor de WiFi — separada de hmi_wifi_set_enabled() porque esa tambien
+// cambia s_wifi_enabled y arranca OTA, cosas que el escaneo no debe tocar.
+static void wifi_driver_ensure_ready(void)
+{
+    if (!s_wifi_initialized) {
+        wifi_init();
+        s_wifi_initialized = true;
+    } else {
+        esp_wifi_start(); // no-op (error ignorado) si ya estaba prendido
+    }
 }
 
 /*****************************************************************************************************/
@@ -665,11 +802,18 @@ void app_main(void)
     // celeste) en vez de mantenerse quieto. Mismo patron que el splash.
     lcd_set_brightness(0);
 
-    // Colas
+    // Colas + tareas UART — REVERTIDO a arrancar aca (justo antes de
+    // ui_init(), como era originalmente) despues de confirmar que
+    // arrancarlas mas temprano (justo tras inicializar el adapter LVGL)
+    // causaba pantalla celeste/reinicio cuando el robot ya estaba
+    // conectado y mandando datos reales desde el arranque. Con el robot
+    // desconectado bootea normal, lo que confirma que era una condicion de
+    // carrera con trafico UART real muy temprano en el boot, no un bug
+    // general. Los valores "unicos" que puedan llegar tarde igual se
+    // cachean y reaplican (ver hmi_reapply_cached_boot_regs).
     xQueueHmiTx = xQueueCreate(50, sizeof(hmi_tx_frame_t));
     if (xQueueHmiTx == NULL)
     {
-        // La cola no se creó porque no había suficiente memoria en el heap de FreeRTOS
         ESP_LOGE(TAG, "Error al crear xQueueHmiTx");
         return;
     }
@@ -677,10 +821,13 @@ void app_main(void)
     xQueueHmiRx = xQueueCreate(50, sizeof(hmi_rx_frame_t));
     if (xQueueHmiRx == NULL)
     {
-        // La cola no se creó porque no había suficiente memoria en el heap de FreeRTOS
         ESP_LOGE(TAG, "Error al crear xQueueHmiRx");
         return;
     }
+
+    xTaskCreate(vTaskHmiTransmit,   "HMI Tx",    TASK_SIZE, NULL, 5, NULL);
+    xTaskCreate(vTaskUartHmiEvents, "HMI Event", TASK_SIZE, NULL, 5, NULL);
+    xTaskCreate(vTaskHmiRxProcess,  "HMI Rx",   TASK_SIZE, NULL, 6, NULL);
 
     // ui_init() construye toda la interfaz (base + paneles ocultos) en un
     // solo pase, dentro de este unico lock. Ver el comentario en ui_init()
@@ -693,6 +840,10 @@ void app_main(void)
         hmi_conn_indicator_create();
         settings_nav_enable_scroll();
         encoder_display_toggle_create();
+        encoder_bigview_create();
+        logo_secret_button_wire();
+        camera_rl1_mode_wire();
+        wifi_settings_ui_init();
         esp_lv_adapter_unlock();
     }
     esp_lv_adapter_refresh_now(disp);
@@ -708,10 +859,11 @@ void app_main(void)
     hmi_log(LOG_OK, "UI loaded");
     hmi_log(LOG_WARN, "Waiting for robot...");
 
-    // Creacion de tareas
-    xTaskCreate(vTaskHmiTransmit,   "HMI Tx",    TASK_SIZE, NULL, 5, NULL);
-    xTaskCreate(vTaskUartHmiEvents, "HMI Event", TASK_SIZE, NULL, 5, NULL);
-    xTaskCreate(vTaskHmiRxProcess,  "HMI Rx",   TASK_SIZE, NULL, 6, NULL);
+    // Por si algun registro "unico" (S/N, modelo, version de firmware) llego
+    // por UART mientras la interfaz todavia se armaba: los widgets ya
+    // existen, se vuelven a aplicar los valores cacheados.
+    hmi_reapply_cached_boot_regs();
+
 #ifdef TEST_BATTERY_VOLTAGE
     xTaskCreate(vTaskBatterySimTest, "Bat Sim",  TASK_SIZE, NULL, 3, NULL);
     ESP_LOGW(TAG, "*** TEST_BATTERY_VOLTAGE ACTIVO: simulacion de bateria habilitada ***");
@@ -1135,6 +1287,8 @@ static void rx_disp_log_frame(uint8_t reg, int32_t value)
 #define NVS_KEY_DEV_NAME   "dev_name"
 #define DEV_NAME_DEF       "WELLTEP Console"
 #define DEV_NAME_MAX       32
+#define NVS_KEY_WIFI_SSID  "wifi_ssid"
+#define NVS_KEY_WIFI_PASS  "wifi_pass"
 #define NVS_KEY_ENC_PERIM_CX100 "enc_perim"   // perimetro del rodillo, centesimas de mm
 #define NVS_KEY_ENC_PPR         "enc_ppr"     // pulsos por vuelta del encoder
 
@@ -1154,8 +1308,16 @@ typedef struct {
 
 typedef struct {
     uint8_t            count;                        // puntos guardados (0-RECORRIDO_MAX_POINTS)
-    uint8_t            speed;                         // 1-5, valido solo durante reproduccion
     recorrido_point_t  points[RECORRIDO_MAX_POINTS];
+    // speed va AL FINAL a proposito: asi los recorridos ya guardados en NVS
+    // (blob binario tal cual, ver recorrido_nvs_read/write) siguen leyendo
+    // "points[]" en el mismo offset de siempre. Si "speed" fuera antes de
+    // "points[]" con este tipo mas grande (uint8_t -> uint16_t), el blob
+    // viejo se desalinearia y corromperia los puntos guardados de recorridos
+    // existentes en equipos ya actualizados — con "speed" al final, lo unico
+    // que pasa con datos viejos es que ese campo no se lee (se resetea al
+    // default via el clamp de abajo), sin tocar los puntos.
+    uint16_t           speed;                         // ms por grado (5-500, paso 5), valido solo durante reproduccion
 } recorrido_t;
 
 typedef struct {
@@ -1170,7 +1332,7 @@ typedef struct {
 static void recorrido_nvs_read(uint8_t idx, recorrido_t *out)
 {
     memset(out, 0, sizeof(*out));
-    out->speed = 3;
+    out->speed = 150;
     nvs_handle_t h;
     const char *key = (idx == 0) ? NVS_KEY_RECORRIDO1 : NVS_KEY_RECORRIDO2;
     if (nvs_open(NVS_DEV_NS, NVS_READONLY, &h) == ESP_OK) {
@@ -1179,7 +1341,7 @@ static void recorrido_nvs_read(uint8_t idx, recorrido_t *out)
         nvs_close(h);
     }
     if (out->count > RECORRIDO_MAX_POINTS) out->count = RECORRIDO_MAX_POINTS;
-    if (out->speed < 1 || out->speed > 5) out->speed = 3;
+    if (out->speed < 5 || out->speed > 500) out->speed = 150;
 }
 
 static void recorrido_nvs_write(uint8_t idx, const recorrido_t *in)
@@ -1369,11 +1531,12 @@ static void auto_rotation_queue_next_point(void)
     g_play_point_idx = next;
     g_move_target_head = r->points[next].head;
     g_move_target_neck = r->points[next].neck;
-    // ms por grado = SPEED * 50 (1=50ms/°, 5=250ms/°, o sea SPEED=1 es el
-    // mas rapido y SPEED=5 el mas lento). Paso fijo de 1 grado por tick, y
-    // el periodo del timer (no el paso) es lo que varia con la velocidad.
+    // r->speed ya es directamente el periodo en ms por grado (5-500, paso
+    // 5 desde los botones +/-, mantener presionado repite): menos ms = mas
+    // rapido. Paso fijo de 1 grado por tick, y el periodo del timer (no el
+    // paso) es lo que varia.
     g_move_step_deg = 1;
-    lv_timer_set_period(g_auto_rotation_timer, r->speed * 50);
+    lv_timer_set_period(g_auto_rotation_timer, r->speed);
     // Resalta en la lista el punto que se esta ejecutando ahora (solo si el
     // editor tiene abierto el mismo recorrido que se esta reproduciendo).
     if (g_play_recorrido_idx == g_editing_recorrido) {
@@ -1469,9 +1632,9 @@ static void hmi_auto_rotation_play_start(void)
     g_move_target_head = r->points[0].head;
     g_move_target_neck = r->points[0].neck;
     g_play_point_idx = 0;
-    // ms por grado = SPEED * 50, ver auto_rotation_queue_next_point().
+    // r->speed ya es directamente el periodo en ms, ver auto_rotation_queue_next_point().
     g_move_step_deg = 1;
-    lv_timer_set_period(g_auto_rotation_timer, r->speed * 50);
+    lv_timer_set_period(g_auto_rotation_timer, r->speed);
     lv_timer_resume(g_auto_rotation_timer);
     modes_giro_automatico_set_state(g_lang->btn_pausar_auto_rotation, true);
     if (g_play_recorrido_idx == g_editing_recorrido) {
@@ -1589,8 +1752,8 @@ static void auto_rotation_editor_open(uint8_t idx)
         lv_label_set_text(objects.ar_title_label, title);
     }
     if (objects.ar_speed_label) {
-        char sbuf[4];
-        lv_snprintf(sbuf, sizeof(sbuf), "%d", (int)g_recorridos[idx].speed);
+        char sbuf[8];
+        lv_snprintf(sbuf, sizeof(sbuf), "%d ms", (int)g_recorridos[idx].speed);
         lv_label_set_text(objects.ar_speed_label, sbuf);
     }
     auto_rotation_sync_labels(get_var_angle_head_value(), get_var_angle_neck_value());
@@ -1623,11 +1786,18 @@ static void auto_rotation_editor_refresh_row_colors(void)
     for (uint32_t i = 0; i < n; i++) {
         lv_obj_t *row = lv_obj_get_child(objects.ar_points_list, i);
         if (!row) continue;
-        lv_color_t bg;
-        if ((int)i == g_ar_playing_point_idx) bg = lv_color_hex(0xff1e6b3a);
-        else if ((int)i == g_editor_selected_point) bg = lv_color_hex(0xff4a3f0a);
-        else bg = lv_color_hex(0xff1e1e1e);
-        lv_obj_set_style_bg_color(row, bg, LV_PART_MAIN | LV_STATE_DEFAULT);
+        // Playing/selected quedan con su color semantico fijo (verde/oliva) en
+        // cualquier tema; el resto de las filas sigue al tema activo.
+        if ((int)i == g_ar_playing_point_idx) {
+            lv_obj_set_style_bg_color(row, lv_color_hex(0xff1e6b3a), LV_PART_MAIN | LV_STATE_DEFAULT);
+        } else if ((int)i == g_editor_selected_point) {
+            lv_obj_set_style_bg_color(row, lv_color_hex(0xff4a3f0a), LV_PART_MAIN | LV_STATE_DEFAULT);
+        } else {
+            lv_obj_set_style_bg_color(row, hmi_theme_bg_indicator(), LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_border_color(row, hmi_theme_bd_card(), LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_t *lbl = lv_obj_get_child(row, lv_obj_get_child_count(row) - 1);
+            if (lbl) lv_obj_set_style_text_color(lbl, hmi_theme_txt_primary(), LV_PART_MAIN | LV_STATE_DEFAULT);
+        }
     }
 }
 
@@ -1635,13 +1805,29 @@ static void auto_rotation_editor_refresh_row_colors(void)
 // reproduciendo un recorrido completo, y de vuelta a "Test" cuando termina o
 // se lo detiene manualmente — mismo patron que modes_giro_automatico_set_state
 // para el boton de MODES home, pero aplicado al boton del editor.
+static bool s_ar_test_running = false; // ultimo estado, para poder reaplicarlo al cambiar de tema
+
 static void ar_test_set_running(bool running)
 {
+    s_ar_test_running = running;
     if (!objects.ar_btn_probar) return;
     lv_obj_t *lbl = lv_obj_get_child(objects.ar_btn_probar, 0);
     if (lbl) lv_label_set_text(lbl, running ? g_lang->btn_detener_prueba : g_lang->btn_probar);
-    lv_color_t border = running ? lv_color_hex(0xffbc0f2d) : lv_color_hex(0xff3c3c3c);
+    // "Corriendo" (rojo) es un color semantico fijo; en reposo, el borde
+    // sigue al tema activo.
+    lv_color_t border = running ? lv_color_hex(0xffbc0f2d) : hmi_theme_bd_card();
     lv_obj_set_style_border_color(objects.ar_btn_probar, border, LV_PART_MAIN | LV_STATE_DEFAULT);
+}
+
+// Reaplica los colores de esta pantalla (filas de la lista + borde del boton
+// Test) cuando el usuario cambia de tema — llamado desde apply_theme() via
+// theme_autorot_editor_panel() (actions.c). Los elementos que SI viven en
+// screens.c (tarjetas, botones +/-, etc.) ya los recolorea esa funcion
+// directamente; esto cubre solo lo que se crea/actualiza en runtime aca.
+void hmi_autorot_editor_retheme(void)
+{
+    auto_rotation_editor_refresh_row_colors();
+    ar_test_set_running(s_ar_test_running);
 }
 
 void ar_point_row_clicked_cb(lv_event_t *e)
@@ -1673,14 +1859,10 @@ static void auto_rotation_editor_refresh_list(void)
         lv_snprintf(buf, sizeof(buf), "%02d      H%d N%d", (int)i + 1, (int)r->points[i].head, (int)r->points[i].neck);
         lv_obj_t *btn = lv_list_add_btn(objects.ar_points_list, NULL, buf);
         lv_obj_add_event_cb(btn, ar_point_row_clicked_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
-        // La lista tiene fondo oscuro; texto claro para que se lea.
-        lv_obj_set_style_bg_color(btn, lv_color_hex(0xff1e1e1e), LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_border_color(btn, lv_color_hex(0xff333333), LV_PART_MAIN | LV_STATE_DEFAULT);
+        // Colores (bg/borde/texto) los pone auto_rotation_editor_refresh_row_colors()
+        // mas abajo, que ya sigue al tema activo — aca solo el modo de recorte.
         lv_obj_t *lbl = lv_obj_get_child(btn, lv_obj_get_child_count(btn) - 1);
-        if (lbl) {
-            lv_obj_set_style_text_color(lbl, lv_color_hex(0xffe5e5e5), LV_PART_MAIN | LV_STATE_DEFAULT);
-            lv_label_set_long_mode(lbl, LV_LABEL_LONG_CLIP);
-        }
+        if (lbl) lv_label_set_long_mode(lbl, LV_LABEL_LONG_CLIP);
     }
 
     // Alto dinamico: con pocos puntos guardados, un alto fijo dejaba un
@@ -1744,18 +1926,18 @@ void ar_speed_dec_cb(lv_event_t *e)
 {
     (void)e;
     recorrido_t *r = &g_recorridos[g_editing_recorrido];
-    if (r->speed > 1) r->speed--;
+    if (r->speed > 5) r->speed -= 5;
     recorrido_nvs_write(g_editing_recorrido, r);
-    if (objects.ar_speed_label) { char buf[4]; lv_snprintf(buf, sizeof(buf), "%d", (int)r->speed); lv_label_set_text(objects.ar_speed_label, buf); }
+    if (objects.ar_speed_label) { char buf[8]; lv_snprintf(buf, sizeof(buf), "%d ms", (int)r->speed); lv_label_set_text(objects.ar_speed_label, buf); }
 }
 
 void ar_speed_inc_cb(lv_event_t *e)
 {
     (void)e;
     recorrido_t *r = &g_recorridos[g_editing_recorrido];
-    if (r->speed < 5) r->speed++;
+    if (r->speed < 500) r->speed += 5;
     recorrido_nvs_write(g_editing_recorrido, r);
-    if (objects.ar_speed_label) { char buf[4]; lv_snprintf(buf, sizeof(buf), "%d", (int)r->speed); lv_label_set_text(objects.ar_speed_label, buf); }
+    if (objects.ar_speed_label) { char buf[8]; lv_snprintf(buf, sizeof(buf), "%d ms", (int)r->speed); lv_label_set_text(objects.ar_speed_label, buf); }
 }
 
 void ar_btn_probar_cb(lv_event_t *e)
@@ -1940,10 +2122,14 @@ static void hmi_wifi_set_enabled(bool enable)
     s_wifi_enabled = enable;
 
     if (enable) {
-        if (!s_wifi_initialized) {
-            wifi_init();
-            s_wifi_initialized = true;
+        wifi_driver_ensure_ready();
 
+        // Separado de la inicializacion del driver: si el editor de WiFi ya
+        // lo inicializo antes (para escanear/verificar una red), esto igual
+        // tiene que correr la primera vez que el usuario activa el WiFi de
+        // actualizacion.
+        if (!s_ota_configured) {
+            s_ota_configured = true;
             ota_http_config_t ota_cfg = {
                 .version_url         = OTA_VERSION_URL,
                 .firmware_url        = OTA_FIRMWARE_URL,
@@ -1954,18 +2140,18 @@ static void hmi_wifi_set_enabled(bool enable)
                 .on_download_failed  = ota_download_failed_cb,
             };
             ota_http_start(&ota_cfg);
-        } else {
-            esp_wifi_start();
         }
-        update_panel_set_status(g_lang->lbl_connecting, false);
+        update_panel_set_status(g_lang->lbl_connecting, UPDATE_LED_BLINK);
         update_network_label_set_visible(false);
+        update_wifi_network_row_set_visible(true);
     } else {
         if (s_wifi_initialized) {
             esp_wifi_disconnect();
             esp_wifi_stop();
         }
-        update_panel_set_status(g_lang->lbl_wifi_off, false);
+        update_panel_set_status(g_lang->lbl_wifi_off, UPDATE_LED_OFF);
         update_network_label_set_visible(false);
+        update_wifi_network_row_set_visible(false);
     }
 
     if (objects.update_toggle_btn) {
@@ -1978,6 +2164,11 @@ static void hmi_wifi_set_enabled(bool enable)
 void hmi_update_panel_retheme(void)
 {
     if (objects.update_toggle_btn) hmi_style_btn(objects.update_toggle_btn, s_wifi_enabled);
+    // Botones que no viven en objects.* (son estaticos de este archivo) y cuyo
+    // color depende de un estado on/off en tiempo de ejecucion, no solo del
+    // tema — apply_theme() no los puede tocar directo, por eso este hook.
+    encoder_toggle_retheme();
+    console_wifi_ui_refresh();
 }
 
 void update_wifi_toggle_cb(lv_event_t *e)
@@ -2150,6 +2341,56 @@ static void dev_nvs_write_device_name(const char *name)
         nvs_set_str(h, NVS_KEY_DEV_NAME, name); nvs_commit(h); nvs_close(h);
     }
 }
+// Settings > WiFi — SSID/contrasena guardados a mano por el usuario, en vez
+// de depender solo de los #define WIFI_SSID/WIFI_PASS fijos en el codigo.
+// Si nunca se guardo nada, "out" queda vacio ("") — quien llama decide el
+// fallback (ver wifi_init()).
+static void dev_nvs_read_wifi_ssid(char *out, size_t max)
+{
+    out[0] = '\0';
+    nvs_handle_t h;
+    if (nvs_open(NVS_DEV_NS, NVS_READONLY, &h) == ESP_OK) {
+        size_t sz = max;
+        nvs_get_str(h, NVS_KEY_WIFI_SSID, out, &sz);
+        nvs_close(h);
+    }
+}
+static void dev_nvs_write_wifi_ssid(const char *ssid)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_DEV_NS, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_str(h, NVS_KEY_WIFI_SSID, ssid); nvs_commit(h); nvs_close(h);
+    }
+}
+static void dev_nvs_read_wifi_pass(char *out, size_t max)
+{
+    out[0] = '\0';
+    nvs_handle_t h;
+    if (nvs_open(NVS_DEV_NS, NVS_READONLY, &h) == ESP_OK) {
+        size_t sz = max;
+        nvs_get_str(h, NVS_KEY_WIFI_PASS, out, &sz);
+        nvs_close(h);
+    }
+}
+static void dev_nvs_write_wifi_pass(const char *pass)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_DEV_NS, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_str(h, NVS_KEY_WIFI_PASS, pass); nvs_commit(h); nvs_close(h);
+    }
+}
+
+// Muestra en Settings > WiFi el SSID guardado (o el fijo del codigo si
+// todavia no se guardo nada) — se llama una vez al arrancar, junto con el
+// resto del cableado post ui_init() en app_main().
+static void wifi_settings_ui_init(void)
+{
+    if (!objects.settings_wifi_ssid_value) return;
+    char cur[WIFI_SSID_MAX];
+    dev_nvs_read_wifi_ssid(cur, sizeof(cur));
+    lv_label_set_text(objects.settings_wifi_ssid_value, cur[0] ? cur : WIFI_SSID);
+}
+
 static void dev_serial_labels_update(void)
 {
     char sn_buff[30];
@@ -2254,6 +2495,26 @@ static bool     s_encoder_show_feet     = false;
 static int32_t  s_encoder_last_raw      = 0;
 static lv_obj_t *s_encoder_btn_feet     = NULL;
 static lv_obj_t *s_encoder_btn_meters   = NULL;
+// Distancia total recorrida en metros (siempre en metros, sin importar el
+// toggle Pies/Metros de la tarjeta ENCODER) — usada para saber cuanto avanzo
+// el robot entre un empuje del trazo y el siguiente, y para la regla de
+// medicion del panel de manejo.
+static float s_encoder_dist_m = 0.0f;
+// Confirmado con la prueba del RAW: la consola SI resetea su propio
+// contador a 0 al recibir HMI_REG_ENCODER=0 (ver hmi_encoder_reset()), asi
+// que no hace falta ningun offset local — se confia directo en el valor
+// crudo que manda.
+// Ultimo valor de inclinacion (Y) conocido — el trazo del panel de manejo
+// NO avanza solo con el tiempo, avanza cuando el ENCODER avanza (ver
+// hmi_encoder_set_raw). Esta variable solo cachea el angulo mas reciente
+// para usarlo en el momento en que el encoder efectivamente se mueve.
+static float s_bigview_current_pitch = 0.0f;
+// Labels del panel de pantalla completa (boton oculto del logo, ver mas
+// abajo) — declarados aca para que encoder_dashboard_refresh() los pueda
+// actualizar tambien cuando el panel esta abierto. El numero va en fuente
+// grande y la unidad (m/ft) en fuente normal, por separado.
+static lv_obj_t *s_encoder_bigview_label      = NULL;
+static lv_obj_t *s_encoder_bigview_unit_label = NULL;
 
 static void encoder_dashboard_refresh(void)
 {
@@ -2263,20 +2524,59 @@ static void encoder_dashboard_refresh(void)
     int32_t ppr         = dev_nvs_read_pin(NVS_KEY_ENC_PPR, ENC_PPR_DEF);
     float perim_mm = perim_cx100 / 100.0f;
     float dist_m  = (ppr > 0) ? ((float)s_encoder_last_raw * perim_mm) / ((float)ppr * 1000.0f) : 0.0f;
+    s_encoder_dist_m = dist_m;
 
     char buf[24];
+    char num_buf[16];
+    const char *unit;
     if (s_encoder_show_feet) {
         snprintf(buf, sizeof(buf), "%.2f ft", dist_m * 3.28084f);
+        snprintf(num_buf, sizeof(num_buf), "%.2f", dist_m * 3.28084f);
+        unit = "ft";
     } else {
         snprintf(buf, sizeof(buf), "%.3f m", dist_m);
+        snprintf(num_buf, sizeof(num_buf), "%.3f", dist_m);
+        unit = "m";
     }
     lv_label_set_text(objects.encoder_value, buf);
+    if (s_encoder_bigview_label) lv_label_set_text(s_encoder_bigview_label, num_buf);
+    if (s_encoder_bigview_unit_label) lv_label_set_text(s_encoder_bigview_unit_label, unit);
 }
 
 void hmi_encoder_set_raw(int32_t raw_pulses)
 {
-    s_encoder_last_raw = raw_pulses;
+    // Solo interesa la distancia positiva (recorrido hacia adelante) — si
+    // el conteo se va a negativo, se hace un reset completo (en vez de
+    // solo recortar a cero) para que quede consistente con la consola.
+    if (raw_pulses < 0) {
+        hmi_encoder_reset();
+        return;
+    }
+    int32_t new_raw = raw_pulses;
+    bool moved = new_raw > s_encoder_last_raw;
+    float prev_dist_m = s_encoder_dist_m;
+    s_encoder_last_raw = new_raw;
+    encoder_dashboard_refresh(); // recalcula y guarda s_encoder_dist_m
+
+    // El trazo de inclinacion del panel de manejo avanza solo cuando el
+    // robot realmente se mueve (el encoder avanza), no con un timer fijo
+    // — asi el eje horizontal del trazo representa distancia recorrida
+    // real, no tiempo ni cantidad de muestras.
+    if (moved) {
+        float delta_dist_m = s_encoder_dist_m - prev_dist_m;
+        bigview_angle_trace_push(s_bigview_current_pitch, delta_dist_m);
+    }
+}
+
+// Resetea la distancia mostrada a 0 y le avisa a la consola (HMI_REG_ENCODER
+// = 0) para que resetee su propio contador — confirmado que la consola SI
+// lo hace, asi que no hace falta ningun offset local, el proximo dato real
+// ya viene desde 0.
+void hmi_encoder_reset(void)
+{
+    s_encoder_last_raw = 0;
     encoder_dashboard_refresh();
+    hmi_send_data(HMI_REG_ENCODER, 0);
 }
 
 // Aplica el modo (UI + estado) sin tocar NVS — usado para restaurar el valor
@@ -2289,6 +2589,15 @@ static void encoder_mode_apply(bool feet)
     encoder_dashboard_refresh();
 }
 
+// Re-colorea los botones FT/METERS con los colores del tema actual sin tocar
+// cual esta activo — llamado desde hmi_update_panel_retheme() cuando el
+// usuario cambia de tema (Dark/Classic/Light) en Settings.
+static void encoder_toggle_retheme(void)
+{
+    hmi_style_btn(s_encoder_btn_feet,   s_encoder_show_feet);
+    hmi_style_btn(s_encoder_btn_meters, !s_encoder_show_feet);
+}
+
 // Elegido por el usuario (toque en PIES/METROS): persiste en NVS y aplica.
 static void encoder_mode_set(bool feet)
 {
@@ -2297,42 +2606,692 @@ static void encoder_mode_set(bool feet)
 }
 static void encoder_mode_feet_cb(lv_event_t *e)   { (void)e; encoder_mode_set(true); }
 static void encoder_mode_meters_cb(lv_event_t *e) { (void)e; encoder_mode_set(false); }
+// Tocar el numero grande de GENERAL CONTROLS tambien alterna la unidad —
+// forma mas directa que ir hasta Settings > Encoder para el mismo toggle.
+static void encoder_value_toggle_cb(lv_event_t *e) { (void)e; encoder_mode_set(!s_encoder_show_feet); }
 
-// Se engancha a la tarjeta ENCODER ya creada por screens.c en GENERAL CONTROLS
-// (objects.obj17), en el hueco libre entre el valor grande y el boton RESET.
+// Se engancha al panel Settings > Encoder ya creado por screens.c
+// (objects.settings_content_encoder), como una fila mas debajo de
+// Pulses/rev — junto con el resto de la calibracion del encoder, no en la
+// tarjeta chica de GENERAL CONTROLS (que ahora usa todo el espacio para
+// mostrar el numero mas grande).
 static void encoder_display_toggle_create(void)
 {
-    if (!objects.obj17) return;
+    if (!objects.settings_content_encoder) return;
 
-    lv_obj_t *btn_f = lv_button_create(objects.obj17);
+    lv_obj_t *row = lv_obj_create(objects.settings_content_encoder);
+    lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(row, 0, 0);
+    lv_obj_set_style_border_width(row, 0, 0);
+    lv_obj_set_style_pad_all(row, 0, 0);
+    lv_obj_set_style_layout(row, LV_LAYOUT_FLEX, 0);
+    lv_obj_set_style_flex_flow(row, LV_FLEX_FLOW_ROW, 0);
+    lv_obj_set_style_flex_cross_place(row, LV_FLEX_ALIGN_CENTER, 0);
+    lv_obj_set_style_pad_column(row, 12, 0);
+    lv_obj_set_style_pad_ver(row, 6, 0);
+    lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *key = lv_label_create(row);
+    lv_obj_set_size(key, 130, LV_SIZE_CONTENT);
+    lv_obj_set_style_text_color(key, lv_color_hex(0xffaaaaaa), 0);
+    lv_obj_set_style_text_font(key, &lv_font_montserrat_18, 0);
+    lv_label_set_text(key, "Display unit:");
+
+    lv_obj_t *btn_f = lv_button_create(row);
     s_encoder_btn_feet = btn_f;
-    lv_obj_set_pos(btn_f, 66, 100);
-    lv_obj_set_size(btn_f, 110, 30);
-    lv_obj_set_style_radius(btn_f, 6, 0);
+    lv_obj_set_size(btn_f, 110, 40);
+    lv_obj_set_style_radius(btn_f, 8, 0);
     lv_obj_set_style_shadow_opa(btn_f, 0, 0);
     lv_obj_t *lbl_f = lv_label_create(btn_f);
     lv_obj_set_style_align(lbl_f, LV_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(lbl_f, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(lbl_f, &lv_font_montserrat_18, 0);
     lv_label_set_text(lbl_f, g_lang->btn_feet);
     lv_obj_add_event_cb(btn_f, encoder_mode_feet_cb, LV_EVENT_CLICKED, NULL);
 
-    lv_obj_t *btn_m = lv_button_create(objects.obj17);
+    lv_obj_t *btn_m = lv_button_create(row);
     s_encoder_btn_meters = btn_m;
-    lv_obj_set_pos(btn_m, 191, 100);
-    lv_obj_set_size(btn_m, 110, 30);
-    lv_obj_set_style_radius(btn_m, 6, 0);
+    lv_obj_set_size(btn_m, 110, 40);
+    lv_obj_set_style_radius(btn_m, 8, 0);
     lv_obj_set_style_shadow_opa(btn_m, 0, 0);
     lv_obj_t *lbl_m = lv_label_create(btn_m);
     lv_obj_set_style_align(lbl_m, LV_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(lbl_m, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(lbl_m, &lv_font_montserrat_18, 0);
     lv_label_set_text(lbl_m, g_lang->btn_meters);
     lv_obj_add_event_cb(btn_m, encoder_mode_meters_cb, LV_EVENT_CLICKED, NULL);
+
+    if (objects.encoder_value) {
+        lv_obj_add_flag(objects.encoder_value, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(objects.encoder_value, encoder_value_toggle_cb, LV_EVENT_CLICKED, NULL);
+    }
 
     // Restaurar el modo guardado en NVS (default: metros) sin volver a
     // escribirlo — encoder_mode_apply() no toca NVS, a diferencia de
     // encoder_mode_set() (que es solo para cuando el usuario toca un boton).
     bool saved_feet = dev_nvs_read_pin(NVS_KEY_ENC_MODE_FEET, 0) != 0;
     encoder_mode_apply(saved_feet);
+}
+
+//*************************************************************************************
+// "Panel de manejo": boton oculto en el logo "WELLTEP" de la esquina
+// superior izquierda que abre un panel de pantalla completa con el valor
+// del encoder gigante y centrado (mismo texto/formato que la tarjeta
+// ENCODER de GENERAL CONTROLS), mas la bateria de robot y consola (con
+// porcentaje) en la esquina superior derecha. Se cierra tocando en
+// cualquier parte del panel.
+//*************************************************************************************
+static lv_obj_t *s_encoder_bigview_panel = NULL;
+static lv_obj_t *s_bigview_robot_batt_bar     = NULL;
+static lv_obj_t *s_bigview_robot_batt_label   = NULL;
+static lv_obj_t *s_bigview_console_batt_bar   = NULL;
+static lv_obj_t *s_bigview_console_batt_label = NULL;
+static lv_obj_t *s_bigview_robot_batt_caption   = NULL;
+static lv_obj_t *s_bigview_console_batt_caption = NULL;
+static lv_obj_t *s_bigview_distance_caption = NULL; // "DISTANCIA RECORRIDA"
+static lv_obj_t *s_bigview_trace_caption    = NULL; // "TRAZA DE RECORRIDO"
+static lv_obj_t *s_bigview_robot_model_label  = NULL; // debajo del logo Welltepp
+static lv_obj_t *s_bigview_led_bt             = NULL; // al lado de la bateria ROBOT
+static lv_obj_t *s_bigview_led_online         = NULL;
+// Barra de niveles (4 escalones: 25/50/75/100%) del brillo del LED del
+// robot — arriba de "DISTANCIA RECORRIDA", horizontal, en amarillo.
+static lv_obj_t *s_bigview_led_level_seg[4] = { NULL, NULL, NULL, NULL };
+
+void hmi_bigview_led_level_refresh(void)
+{
+    int pct = atoi(get_var_brightness());
+    static const int thresholds[4] = { 25, 50, 75, 100 };
+    for (int i = 0; i < 4; i++) {
+        if (!s_bigview_led_level_seg[i]) continue;
+        bool on = pct >= thresholds[i];
+        lv_obj_set_style_bg_color(s_bigview_led_level_seg[i],
+            lv_color_hex(0xfff5c518), 0);
+        lv_obj_set_style_bg_opa(s_bigview_led_level_seg[i], on ? 255 : 60, 0);
+    }
+}
+// Traza de pitch (ANGLE_Y) tipo "grabadora de vuelo" — basada en la logica
+// de C:\Users\USUARIO\Music\PITCH\pitch_trace_gui.py (la PENDIENTE del
+// trazo, no su altura, representa el angulo), pero con el eje horizontal
+// atado a DISTANCIA REAL recorrida (encoder) en vez de a "una muestra = un
+// paso fijo": el cuadro representa BIGVIEW_TRACE_WINDOW_M metros de tuberia
+// recorrida, y se desliza a medida que el robot avanza.
+#define BIGVIEW_TRACE_W          700    // ancho visible en px
+#define BIGVIEW_TRACE_H          120
+#define BIGVIEW_TRACE_WINDOW_M   2.0f   // el cuadro representa 2m de recorrido
+#define BIGVIEW_TRACE_PX_PER_M   (BIGVIEW_TRACE_W / BIGVIEW_TRACE_WINDOW_M)
+#define BIGVIEW_TRACE_GAIN       1.0f   // == TRACE_GAIN de Python
+#define BIGVIEW_TRACE_MAX_DEG    75.0f  // == TRACE_MAX_DEG de Python
+#define BIGVIEW_TRACE_MAX_PTS    300    // buffer de seguridad (no todos visibles a la vez)
+
+static lv_obj_t *s_bigview_angle_line   = NULL;
+static lv_obj_t *s_bigview_angle_tip    = NULL;
+static lv_obj_t *s_bigview_ruler_left   = NULL; // distancia en el borde izquierdo (mas vieja)
+static lv_obj_t *s_bigview_ruler_mid    = NULL;
+static lv_obj_t *s_bigview_ruler_right  = NULL; // distancia actual (punta del trazo)
+
+// Puntos "en el mundo" (x acumulado en px == distancia recorrida * escala,
+// nunca se resetea); se recortan por la izquierda cuando quedan fuera de
+// la ventana visible de BIGVIEW_TRACE_WINDOW_M metros.
+static float s_trace_x[BIGVIEW_TRACE_MAX_PTS];
+static float s_trace_y[BIGVIEW_TRACE_MAX_PTS];
+static int   s_trace_len = 0;
+static lv_point_precise_t s_angle_trace_pts[BIGVIEW_TRACE_MAX_PTS];
+
+// == _amplify_for_display() en Python: empuja un poco las inclinaciones
+// casi nulas para que se note en el trazo, saturando suave (tanh) sin
+// distorsionar giros grandes reales.
+static float bigview_amplify_for_display(float angle_deg)
+{
+    float x = angle_deg * BIGVIEW_TRACE_GAIN / BIGVIEW_TRACE_MAX_DEG;
+    return BIGVIEW_TRACE_MAX_DEG * tanhf(x);
+}
+
+// Punto de partida del trazo — se llama una vez al crear el panel.
+static void bigview_angle_trace_reset(void)
+{
+    s_trace_len = 1;
+    s_trace_x[0] = 0.0f;
+    s_trace_y[0] = BIGVIEW_TRACE_H / 2.0f;
+}
+
+// Actualiza los 3 numeros de la regla debajo del cuadro (distancia real
+// acumulada — izquierda = borde mas viejo visible, derecha = ahora mismo).
+static void bigview_ruler_update(void)
+{
+    if (!s_bigview_ruler_right) return;
+    float now_m = s_encoder_dist_m;
+    float left_m = now_m - BIGVIEW_TRACE_WINDOW_M;
+    float mid_m  = now_m - BIGVIEW_TRACE_WINDOW_M / 2.0f;
+    if (left_m < 0) left_m = 0;
+    if (mid_m  < 0) mid_m  = 0;
+
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%.1fm", left_m);
+    lv_label_set_text(s_bigview_ruler_left, buf);
+    snprintf(buf, sizeof(buf), "%.1fm", mid_m);
+    lv_label_set_text(s_bigview_ruler_mid, buf);
+    snprintf(buf, sizeof(buf), "%.1fm", now_m);
+    lv_label_set_text(s_bigview_ruler_right, buf);
+}
+
+// Redibuja la linea mapeando los puntos "del mundo" a la ventana visible
+// (el mas nuevo siempre queda pegado al borde derecho).
+static void bigview_angle_trace_redraw(void)
+{
+    if (!s_bigview_angle_line || s_trace_len == 0) return;
+
+    float right_x   = s_trace_x[s_trace_len - 1];
+    // Mientras no se recorrieron los BIGVIEW_TRACE_WINDOW_M completos, el
+    // borde izquierdo se queda fijo en 0 (el trazo crece desde la
+    // izquierda, como antes) — recien empieza a deslizarse de verdad una
+    // vez que hay mas de una ventana llena de datos.
+    float left_edge = right_x - BIGVIEW_TRACE_W;
+    if (left_edge < 0.0f) left_edge = 0.0f;
+
+    int n = 0;
+    for (int i = 0; i < s_trace_len && n < BIGVIEW_TRACE_MAX_PTS; i++) {
+        float sx = s_trace_x[i] - left_edge;
+        if (sx < 0.0f) sx = 0.0f;
+        s_angle_trace_pts[n].x = (lv_value_precise_t)sx;
+        s_angle_trace_pts[n].y = (lv_value_precise_t)s_trace_y[i];
+        n++;
+    }
+
+    lv_line_set_points_mutable(s_bigview_angle_line, s_angle_trace_pts, n);
+    if (s_bigview_angle_tip && n > 0) {
+        lv_obj_set_pos(s_bigview_angle_tip,
+            (int32_t)s_angle_trace_pts[n - 1].x - 9,
+            (int32_t)s_angle_trace_pts[n - 1].y - 9);
+    }
+}
+
+// == self.pitch_trace.append(pitch) en _handle_line() de Python, pero el
+// paso en X es proporcional a la distancia REAL recorrida (delta_dist_m),
+// no un paso fijo por muestra.
+static void bigview_angle_trace_push(float angle_deg, float delta_dist_m)
+{
+    if (!s_bigview_angle_line || s_trace_len == 0 || delta_dist_m <= 0.0f) return;
+
+    float step_px = delta_dist_m * BIGVIEW_TRACE_PX_PER_M;
+    float vis = bigview_amplify_for_display(angle_deg);
+    float rad = vis * ((float)M_PI / 180.0f);
+
+    float last_x = s_trace_x[s_trace_len - 1];
+    float last_y = s_trace_y[s_trace_len - 1];
+    float new_x = last_x + step_px * cosf(rad);
+    float new_y = last_y + step_px * sinf(rad); // positivo = sube (igual que Python)
+    if (new_y < 4.0f) new_y = 4.0f;
+    if (new_y > BIGVIEW_TRACE_H - 4.0f) new_y = BIGVIEW_TRACE_H - 4.0f;
+
+    if (s_trace_len >= BIGVIEW_TRACE_MAX_PTS) {
+        memmove(s_trace_x, s_trace_x + 1, (BIGVIEW_TRACE_MAX_PTS - 1) * sizeof(float));
+        memmove(s_trace_y, s_trace_y + 1, (BIGVIEW_TRACE_MAX_PTS - 1) * sizeof(float));
+        s_trace_len--;
+    }
+    s_trace_x[s_trace_len] = new_x;
+    s_trace_y[s_trace_len] = new_y;
+    s_trace_len++;
+
+    // Recorta puntos que ya quedaron fuera de la ventana visible.
+    float left_edge = new_x - BIGVIEW_TRACE_W;
+    int drop = 0;
+    while (drop < s_trace_len - 1 && s_trace_x[drop] < left_edge) drop++;
+    if (drop > 0) {
+        memmove(s_trace_x, s_trace_x + drop, (s_trace_len - drop) * sizeof(float));
+        memmove(s_trace_y, s_trace_y + drop, (s_trace_len - drop) * sizeof(float));
+        s_trace_len -= drop;
+    }
+
+    bigview_angle_trace_redraw();
+    bigview_ruler_update();
+}
+
+// Vuelve la distancia del encoder a cero y limpia el trazo/regla del panel
+// de manejo — gesto de 2 toques.
+static void bigview_reset_encoder_and_trace(void)
+{
+    hmi_encoder_reset();
+    bigview_angle_trace_reset();
+    bigview_angle_trace_redraw();
+    bigview_ruler_update();
+}
+
+// Al vencer la ventana de 400ms sin toques nuevos: si quedaron exactamente
+// 2 toques contados, dispara el reset. 1 toque solo no hace nada. 3 toques
+// se resuelven antes, en encoder_bigview_tap_cb() (no esperan a este timer).
+static int       s_bigview_tap_count = 0;
+static lv_timer_t *s_bigview_tap_timer = NULL;
+static void bigview_tap_timeout_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (s_bigview_tap_count == 2) {
+        bigview_reset_encoder_and_trace();
+    }
+    s_bigview_tap_count = 0;
+    s_bigview_tap_timer = NULL; // repeat_count=1: LVGL la borra sola despues de correr
+}
+
+// Gesto del panel de manejo: 1 toque no hace nada, 2 toques resetean
+// encoder+trazo, 3 toques cierran el panel.
+static void encoder_bigview_tap_cb(lv_event_t *e)
+{
+    (void)e;
+    s_bigview_tap_count++;
+
+    if (s_bigview_tap_count >= 3) {
+        if (s_bigview_tap_timer) {
+            lv_timer_delete(s_bigview_tap_timer);
+            s_bigview_tap_timer = NULL;
+        }
+        s_bigview_tap_count = 0;
+        if (s_encoder_bigview_panel) lv_obj_add_flag(s_encoder_bigview_panel, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+
+    if (s_bigview_tap_timer) {
+        lv_timer_reset(s_bigview_tap_timer);
+    } else {
+        s_bigview_tap_timer = lv_timer_create(bigview_tap_timeout_cb, 400, NULL);
+        lv_timer_set_repeat_count(s_bigview_tap_timer, 1);
+    }
+}
+
+// Mismos colores/umbrales que la barra de bateria del robot en Control
+// General (ver case HMI_REG_ROBOT_VOLTAGE), pero por porcentaje en vez de
+// mV crudos, para poder reusarla igual con la bateria de la consola.
+static lv_color_t battery_bar_color(uint8_t percent)
+{
+    if (percent >= 67) return lv_color_hex(0x27AE60); // verde
+    if (percent >= 50) return lv_color_hex(0xF5C518); // amarillo
+    if (percent >= 42) return lv_color_hex(0xE67E22); // naranja
+    return lv_color_hex(0xE74C3C);                     // rojo
+}
+
+// Crea una "celda" de bateria compacta (barra vertical + caption + valor),
+// clon chico de la tarjeta SYSTEM BATTERY de Control General.
+static void battery_cell_create(lv_obj_t *parent, const char *caption,
+                                 lv_obj_t **out_bar, lv_obj_t **out_label,
+                                 lv_obj_t **out_caption)
+{
+    // 72px (antes 64) — "CONSOLA" no entraba en 64px y se veia recortado
+    // ("CONSOL").
+    lv_obj_t *col = lv_obj_create(parent);
+    lv_obj_set_size(col, 72, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(col, 0, 0);
+    lv_obj_set_style_border_width(col, 0, 0);
+    lv_obj_set_style_pad_all(col, 0, 0);
+    lv_obj_set_style_pad_row(col, 4, 0);
+    lv_obj_set_style_layout(col, LV_LAYOUT_FLEX, 0);
+    lv_obj_set_style_flex_flow(col, LV_FLEX_FLOW_COLUMN, 0);
+    lv_obj_set_style_flex_cross_place(col, LV_FLEX_ALIGN_CENTER, 0);
+    lv_obj_remove_flag(col, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(col, LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t *cap = lv_label_create(col);
+    lv_obj_set_style_text_font(cap, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(cap, lv_color_hex(0xffaaaaaa), 0);
+    lv_label_set_text(cap, caption);
+
+    lv_obj_t *bar = lv_bar_create(col);
+    lv_obj_set_size(bar, 32, 64);
+    lv_obj_set_style_bg_color(bar, lv_color_hex(0xff2d2d2d), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_radius(bar, 8, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_radius(bar, 8, LV_PART_INDICATOR | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_color(bar, lv_color_hex(0xff27ae60), LV_PART_INDICATOR | LV_STATE_DEFAULT);
+    lv_bar_set_value(bar, 0, LV_ANIM_OFF);
+
+    lv_obj_t *val = lv_label_create(col);
+    lv_obj_set_style_text_font(val, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(val, lv_color_hex(0xffffffff), 0);
+    lv_label_set_text(val, "--%");
+
+    *out_bar     = bar;
+    *out_label   = val;
+    *out_caption = cap;
+}
+
+// Refresca la bateria mostrada en la esquina del panel de manejo — llamado
+// al abrir el panel y tambien desde HMI_REG_ROBOT_VOLTAGE/CONSOLE_VOLTAGE
+// para que se actualice en vivo mientras esta abierto.
+static void bigview_battery_refresh(void)
+{
+    if (s_bigview_robot_batt_bar) {
+        uint8_t p = (uint8_t)atoi(get_var_robot_voltage_percent());
+        lv_bar_set_value(s_bigview_robot_batt_bar, p, LV_ANIM_OFF);
+        lv_obj_set_style_bg_color(s_bigview_robot_batt_bar, battery_bar_color(p), LV_PART_INDICATOR | LV_STATE_DEFAULT);
+    }
+    if (s_bigview_robot_batt_label) {
+        lv_label_set_text(s_bigview_robot_batt_label, get_var_robot_voltage_percent());
+    }
+    if (s_bigview_console_batt_bar) {
+        uint8_t p = (uint8_t)atoi(get_var_console_voltage_percent());
+        lv_bar_set_value(s_bigview_console_batt_bar, p, LV_ANIM_OFF);
+        lv_obj_set_style_bg_color(s_bigview_console_batt_bar, battery_bar_color(p), LV_PART_INDICATOR | LV_STATE_DEFAULT);
+    }
+    if (s_bigview_console_batt_label) {
+        lv_label_set_text(s_bigview_console_batt_label, get_var_console_voltage_percent());
+    }
+}
+
+static void encoder_bigview_create(void)
+{
+    if (!objects.main) return;
+
+    lv_obj_t *panel = lv_obj_create(objects.main);
+    s_encoder_bigview_panel = panel;
+    lv_obj_set_pos(panel, 0, 0);
+    lv_obj_set_size(panel, 800, 480);
+    lv_obj_set_style_radius(panel, 0, 0);
+    lv_obj_set_style_border_width(panel, 0, 0);
+    lv_obj_set_style_pad_all(panel, 0, 0);
+    lv_obj_set_style_bg_color(panel, lv_color_hex(0xff000000), 0);
+    lv_obj_set_style_bg_opa(panel, 255, 0);
+    lv_obj_remove_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(panel, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(panel, encoder_bigview_tap_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_flag(panel, LV_OBJ_FLAG_HIDDEN);
+
+    lv_obj_t *dist_col = lv_obj_create(panel);
+    lv_obj_set_size(dist_col, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(dist_col, 0, 0);
+    lv_obj_set_style_border_width(dist_col, 0, 0);
+    lv_obj_set_style_pad_all(dist_col, 0, 0);
+    lv_obj_set_style_pad_row(dist_col, 6, 0);
+    lv_obj_set_style_layout(dist_col, LV_LAYOUT_FLEX, 0);
+    lv_obj_set_style_flex_flow(dist_col, LV_FLEX_FLOW_COLUMN, 0);
+    lv_obj_set_style_flex_cross_place(dist_col, LV_FLEX_ALIGN_CENTER, 0);
+    lv_obj_remove_flag(dist_col, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(dist_col, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_align(dist_col, LV_ALIGN_CENTER, 0, -100);
+
+    // Barra de niveles del brillo del LED del robot — 4 escalones
+    // (25/50/75/100%) horizontales en amarillo, arriba de "DISTANCIA
+    // RECORRIDA". Se actualiza via hmi_bigview_led_level_refresh().
+    lv_obj_t *led_level_row = lv_obj_create(dist_col);
+    lv_obj_set_size(led_level_row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(led_level_row, 0, 0);
+    lv_obj_set_style_border_width(led_level_row, 0, 0);
+    lv_obj_set_style_pad_all(led_level_row, 0, 0);
+    lv_obj_set_style_pad_column(led_level_row, 6, 0);
+    lv_obj_set_style_layout(led_level_row, LV_LAYOUT_FLEX, 0);
+    lv_obj_set_style_flex_flow(led_level_row, LV_FLEX_FLOW_ROW, 0);
+    lv_obj_remove_flag(led_level_row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(led_level_row, LV_OBJ_FLAG_CLICKABLE);
+
+    for (int i = 0; i < 4; i++) {
+        lv_obj_t *seg = lv_obj_create(led_level_row);
+        s_bigview_led_level_seg[i] = seg;
+        lv_obj_set_size(seg, 40, 8);
+        lv_obj_set_style_radius(seg, 2, 0);
+        lv_obj_set_style_border_width(seg, 0, 0);
+        lv_obj_set_style_bg_color(seg, lv_color_hex(0xfff5c518), 0);
+        lv_obj_set_style_bg_opa(seg, 60, 0);
+        lv_obj_remove_flag(seg, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_remove_flag(seg, LV_OBJ_FLAG_CLICKABLE);
+    }
+    hmi_bigview_led_level_refresh();
+
+    lv_obj_t *caption = lv_label_create(dist_col);
+    s_bigview_distance_caption = caption;
+    lv_obj_set_style_text_font(caption, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(caption, lv_color_hex(0xffaaaaaa), 0);
+    lv_label_set_text(caption, g_lang->panel_drive_distance_caption);
+
+    // Fila numero+unidad: el numero usa la fuente propia grande (ver
+    // main/ui/font_distance.c), la unidad (m/ft) queda en el mismo
+    // tamano que el titulo "DISTANCIA RECORRIDA", alineados por abajo.
+    lv_obj_t *num_row = lv_obj_create(dist_col);
+    lv_obj_set_size(num_row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(num_row, 0, 0);
+    lv_obj_set_style_border_width(num_row, 0, 0);
+    lv_obj_set_style_pad_all(num_row, 0, 0);
+    lv_obj_set_style_pad_column(num_row, 8, 0);
+    lv_obj_set_style_layout(num_row, LV_LAYOUT_FLEX, 0);
+    lv_obj_set_style_flex_flow(num_row, LV_FLEX_FLOW_ROW, 0);
+    lv_obj_set_style_flex_cross_place(num_row, LV_FLEX_ALIGN_END, 0);
+    lv_obj_remove_flag(num_row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(num_row, LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t *label = lv_label_create(num_row);
+    s_encoder_bigview_label = label;
+    lv_obj_set_style_text_font(label, &lv_font_distance, 0);
+    lv_obj_set_style_text_color(label, lv_color_hex(0xffffffff), 0);
+    lv_label_set_text(label, "0.000");
+
+    lv_obj_t *unit = lv_label_create(num_row);
+    s_encoder_bigview_unit_label = unit;
+    lv_obj_set_style_text_font(unit, &lv_font_montserrat_42, 0);
+    lv_obj_set_style_text_color(unit, lv_color_hex(0xffaaaaaa), 0);
+    lv_obj_set_style_pad_bottom(unit, 12, 0);
+    lv_label_set_text(unit, "m");
+
+    // Traza de pitch (ANGLE_Y) — debajo del numero del encoder. Replica de
+    // pitch_trace_gui.py: la PENDIENTE de la linea representa el angulo,
+    // no su altura (ver bigview_angle_trace_redraw()).
+    lv_obj_t *angle_caption = lv_label_create(panel);
+    s_bigview_trace_caption = angle_caption;
+    lv_obj_set_style_text_font(angle_caption, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(angle_caption, lv_color_hex(0xffaaaaaa), 0);
+    lv_label_set_text(angle_caption, g_lang->panel_drive_trace_caption);
+    lv_obj_align(angle_caption, LV_ALIGN_TOP_MID, 0, 268);
+
+    // +24 de margen (12px por lado, via padding) para que el circulo de la
+    // punta (18px) no quede tapado por el marco de la caja.
+    lv_obj_t *trace_box = lv_obj_create(panel);
+    lv_obj_set_size(trace_box, BIGVIEW_TRACE_W + 24, BIGVIEW_TRACE_H + 24);
+    lv_obj_align(trace_box, LV_ALIGN_TOP_MID, 0, 296);
+    lv_obj_set_style_pad_all(trace_box, 12, 0);
+    lv_obj_set_style_bg_color(trace_box, lv_color_hex(0xff1a1a1a), 0);
+    lv_obj_set_style_bg_opa(trace_box, 40, 0);   // traslucido
+    lv_obj_set_style_border_color(trace_box, lv_color_hex(0xff2d2d2d), 0);
+    lv_obj_set_style_border_width(trace_box, 2, 0);
+    lv_obj_set_style_border_opa(trace_box, 150, 0);
+    lv_obj_set_style_radius(trace_box, 10, 0);
+    lv_obj_remove_flag(trace_box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(trace_box, LV_OBJ_FLAG_CLICKABLE);
+
+    // Linea de "nivel" (referencia horizontal en la mitad), PUNTEADA — ==
+    // la linea punteada gris de _draw_pitch_trace() en Python.
+    static lv_point_precise_t level_ref_pts[2];
+    level_ref_pts[0].x = 0;
+    level_ref_pts[0].y = BIGVIEW_TRACE_H / 2;
+    level_ref_pts[1].x = BIGVIEW_TRACE_W;
+    level_ref_pts[1].y = BIGVIEW_TRACE_H / 2;
+    lv_obj_t *level_ref = lv_line_create(trace_box);
+    lv_obj_set_size(level_ref, BIGVIEW_TRACE_W, BIGVIEW_TRACE_H);
+    lv_line_set_points(level_ref, level_ref_pts, 2);
+    lv_obj_set_style_line_color(level_ref, lv_color_hex(0xff888888), 0);
+    lv_obj_set_style_line_width(level_ref, 1, 0);
+    lv_obj_set_style_line_dash_width(level_ref, 4, 0);
+    lv_obj_set_style_line_dash_gap(level_ref, 4, 0);
+    lv_obj_remove_flag(level_ref, LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t *line = lv_line_create(trace_box);
+    s_bigview_angle_line = line;
+    lv_obj_set_size(line, BIGVIEW_TRACE_W, BIGVIEW_TRACE_H);
+    lv_obj_set_style_line_color(line, lv_color_hex(0xfff5c518), 0);
+    lv_obj_set_style_line_width(line, 2, 0);
+    lv_obj_set_style_line_rounded(line, true, 0);
+    lv_obj_remove_flag(line, LV_OBJ_FLAG_CLICKABLE);
+
+    // Punto "actual" — circulo solido en la punta de la traza, == el
+    // cv.create_oval(...) verde con borde blanco del script Python.
+    lv_obj_t *tip = lv_obj_create(trace_box);
+    s_bigview_angle_tip = tip;
+    lv_obj_set_size(tip, 18, 18);
+    lv_obj_set_style_radius(tip, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(tip, lv_color_hex(0xff39ff6a), 0);
+    lv_obj_set_style_bg_opa(tip, 255, 0);
+    lv_obj_set_style_border_color(tip, lv_color_hex(0xffffffff), 0);
+    lv_obj_set_style_border_width(tip, 2, 0);
+    lv_obj_remove_flag(tip, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(tip, LV_OBJ_FLAG_CLICKABLE);
+
+    bigview_angle_trace_reset();
+    bigview_angle_trace_redraw();
+
+    // Regla de medicion debajo del cuadro: 3 marcas cada 1m dentro de la
+    // ventana de BIGVIEW_TRACE_WINDOW_M (2m) — izquierda = borde mas viejo
+    // visible, centro, derecha = distancia actual (punta del trazo).
+    int32_t ruler_y = 296 + BIGVIEW_TRACE_H + 24 + 6;
+
+    lv_obj_t *ruler_left = lv_label_create(panel);
+    s_bigview_ruler_left = ruler_left;
+    lv_obj_set_style_text_font(ruler_left, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(ruler_left, lv_color_hex(0xff888888), 0);
+    lv_label_set_text(ruler_left, "0.0m");
+    lv_obj_align(ruler_left, LV_ALIGN_TOP_MID, -(BIGVIEW_TRACE_W / 2), ruler_y);
+
+    lv_obj_t *ruler_mid = lv_label_create(panel);
+    s_bigview_ruler_mid = ruler_mid;
+    lv_obj_set_style_text_font(ruler_mid, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(ruler_mid, lv_color_hex(0xff888888), 0);
+    lv_label_set_text(ruler_mid, "0.0m");
+    lv_obj_align(ruler_mid, LV_ALIGN_TOP_MID, 0, ruler_y);
+
+    lv_obj_t *ruler_right = lv_label_create(panel);
+    s_bigview_ruler_right = ruler_right;
+    lv_obj_set_style_text_font(ruler_right, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(ruler_right, lv_color_hex(0xff888888), 0);
+    lv_label_set_text(ruler_right, "0.0m");
+    lv_obj_align(ruler_right, LV_ALIGN_TOP_MID, (BIGVIEW_TRACE_W / 2), ruler_y);
+
+    bigview_ruler_update();
+
+    // Logo Welltepp — esquina superior izquierda, opuesta a la bateria.
+    lv_obj_t *logo = lv_img_create(panel);
+    lv_img_set_src(logo, &lock_logo_wordmark);
+    lv_image_set_scale(logo, 205); // 205/256 ~ 80%, igual que la barra superior
+    lv_obj_set_pos(logo, 16, 16);
+    lv_obj_remove_flag(logo, LV_OBJ_FLAG_CLICKABLE);
+
+    // Modelo del robot (RD80/RD90/RD100) — debajo del logo Welltepp, en
+    // blanco. Arranca oculto (como el pill de la barra superior) y solo
+    // aparece cuando llega HMI_REG_ROBOT_MODEL real — ver apply_robot_model().
+    lv_obj_t *model_label = lv_label_create(panel);
+    s_bigview_robot_model_label = model_label;
+    lv_obj_set_style_text_font(model_label, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(model_label, lv_color_hex(0xffffffff), 0);
+    lv_label_set_text(model_label, "RD--");
+    lv_obj_set_pos(model_label, 16, 42);
+    lv_obj_add_flag(model_label, LV_OBJ_FLAG_HIDDEN);
+
+    // Bateria robot/consola — esquina superior derecha, mismo estilo de
+    // barra que la tarjeta SYSTEM BATTERY de Control General. Ancho
+    // ampliado para la columna de LEDs (Bluetooth/Online) al lado de ROBOT
+    // y para que "CONSOLA" entre completo.
+    lv_obj_t *batt_row = lv_obj_create(panel);
+    lv_obj_set_pos(batt_row, 514, 16);
+    lv_obj_set_size(batt_row, 270, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(batt_row, 0, 0);
+    lv_obj_set_style_border_width(batt_row, 0, 0);
+    lv_obj_set_style_pad_all(batt_row, 0, 0);
+    lv_obj_set_style_pad_column(batt_row, 24, 0);
+    lv_obj_set_style_layout(batt_row, LV_LAYOUT_FLEX, 0);
+    lv_obj_set_style_flex_flow(batt_row, LV_FLEX_FLOW_ROW, 0);
+    lv_obj_set_style_flex_main_place(batt_row, LV_FLEX_ALIGN_END, 0);
+    // START (arriba) en vez de CENTER: asi los LEDs quedan a la altura del
+    // texto "ROBOT"/"CONSOLA" (primera fila de cada celda), no centrados
+    // contra toda la altura de la barra+valor.
+    lv_obj_set_style_flex_cross_place(batt_row, LV_FLEX_ALIGN_START, 0);
+    lv_obj_remove_flag(batt_row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(batt_row, LV_OBJ_FLAG_CLICKABLE);
+
+    // LEDs de estado — solo LEDs, sin letrero, al lado de la bateria ROBOT,
+    // en fila horizontal a la altura del texto "ROBOT". Azul = Bluetooth
+    // conectado, Verde = robot online. Se mantienen en espejo con
+    // objects.led_bluetooth/led_online (ver HMI_REG_*_INDICATOR).
+    // Margen alrededor de los LEDs para que el halo/brillo (que crece con
+    // lv_led segun el brillo) no quede recortado contra el borde del
+    // contenedor — mas ancho a los costados que arriba/abajo para no
+    // desalinear la fila con la altura del texto "ROBOT".
+    lv_obj_t *led_col = lv_obj_create(batt_row);
+    lv_obj_set_size(led_col, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(led_col, 0, 0);
+    lv_obj_set_style_border_width(led_col, 0, 0);
+    lv_obj_set_style_pad_top(led_col, 3, 0);
+    lv_obj_set_style_pad_bottom(led_col, 3, 0);
+    lv_obj_set_style_pad_left(led_col, 10, 0);
+    lv_obj_set_style_pad_right(led_col, 10, 0);
+    lv_obj_set_style_pad_column(led_col, 20, 0);
+    lv_obj_set_style_layout(led_col, LV_LAYOUT_FLEX, 0);
+    lv_obj_set_style_flex_flow(led_col, LV_FLEX_FLOW_ROW, 0);
+    lv_obj_set_style_flex_cross_place(led_col, LV_FLEX_ALIGN_CENTER, 0);
+    lv_obj_remove_flag(led_col, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(led_col, LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t *led_bt = lv_led_create(led_col);
+    s_bigview_led_bt = led_bt;
+    lv_obj_set_size(led_bt, 12, 12);
+    lv_led_set_color(led_bt, lv_color_hex(0xff0034ff));
+    lv_led_set_brightness(led_bt, objects.led_bluetooth ? lv_led_get_brightness(objects.led_bluetooth) : 0);
+
+    lv_obj_t *led_on = lv_led_create(led_col);
+    s_bigview_led_online = led_on;
+    lv_obj_set_size(led_on, 12, 12);
+    lv_led_set_color(led_on, lv_color_hex(0xff00971c));
+    lv_led_set_brightness(led_on, objects.led_online ? lv_led_get_brightness(objects.led_online) : 0);
+
+    battery_cell_create(batt_row, g_lang->panel_drive_robot_batt,
+        &s_bigview_robot_batt_bar, &s_bigview_robot_batt_label, &s_bigview_robot_batt_caption);
+    battery_cell_create(batt_row, g_lang->panel_drive_console_batt,
+        &s_bigview_console_batt_bar, &s_bigview_console_batt_label, &s_bigview_console_batt_caption);
+
+    bigview_battery_refresh();
+}
+
+// Logica de apertura compartida por el boton del logo (ya corre con el
+// lock de LVGL tomado, por venir de un evento) y por el combo de joystick
+// adelante->atras detectado en HMI_REG_MOTOR (background, requiere que el
+// llamador tome HMI_LV_LOCKED el mismo).
+static void encoder_bigview_open(void)
+{
+    if (!s_encoder_bigview_panel) encoder_bigview_create();
+    if (!s_encoder_bigview_panel) return;
+    encoder_dashboard_refresh();
+    bigview_battery_refresh();
+    lv_obj_move_foreground(s_encoder_bigview_panel);
+    lv_obj_remove_flag(s_encoder_bigview_panel, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void logo_bigview_open_cb(lv_event_t *e)
+{
+    (void)e;
+    encoder_bigview_open();
+}
+
+// Engancha el logo como boton invisible — se llama una vez desde app_main()
+// junto con el resto del cableado dinamico posterior a ui_init().
+static void logo_secret_button_wire(void)
+{
+    if (!objects.obj1) return;
+    lv_obj_add_flag(objects.obj1, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(objects.obj1, logo_bigview_open_cb, LV_EVENT_CLICKED, NULL);
+}
+
+// Estado de conexion BLE (Settings > Bluetooth) — separado para poder
+// re-traducir el label de estado al cambiar de idioma (hmi_extra_panels_apply_lang)
+// sin depender de que vuelva a llegar HMI_REG_BLUETOOTH_INDICATOR.
+static bool s_bt_connected = false;
+static uint16_t s_bt_mac_hi = 0; // cache de HMI_REG_BLUETOOTH_MAC_HI hasta que llegue el LO
+static const char *bt_status_text(bool connected)
+{
+    return connected ? g_lang->lbl_bluetooth_connected : g_lang->lbl_bluetooth_disconnected;
+}
+
+// Texto traducido del estado de OTA_STATUS (0x1E) de la consola — separado
+// para poder reusarlo tanto al recibir el registro como al recalcar el
+// idioma (hmi_extra_panels_apply_lang) mientras un estado ya esta mostrado.
+static int32_t s_console_ota_last_value = -1; // -1 = todavia no llego ninguno
+static const char *console_ota_status_text(int32_t value)
+{
+    switch (value) {
+        case 0: return g_lang->ota_status_checking;
+        case 1: return g_lang->ota_status_no_conn;
+        case 2: return g_lang->ota_status_up_to_date;
+        case 3: return g_lang->ota_status_updating;
+        case 4: return g_lang->ota_status_success;
+        case 5: return g_lang->ota_status_failed;
+        default: return g_lang->ota_status_unknown;
+    }
 }
 
 // Llamado desde lang_apply() (ui/lang.c) al final, para refrescar textos que
@@ -2349,7 +3308,12 @@ void hmi_extra_panels_apply_lang(void)
     // textos de Conectando/Reconectando/Conectado los pisa el proximo evento
     // de WiFi si esta prendido.
     if (!s_wifi_enabled) {
-        update_panel_set_status(g_lang->lbl_wifi_off, false);
+        update_panel_set_status(g_lang->lbl_wifi_off, UPDATE_LED_OFF);
+    }
+    // "Network: <SSID>" — solo si ya esta visible (WiFi realmente conectado),
+    // re-arma el texto con el idioma nuevo y el SSID actual.
+    if (objects.update_network_label && !lv_obj_has_flag(objects.update_network_label, LV_OBJ_FLAG_HIDDEN)) {
+        update_network_label_set_visible(true);
     }
 
     // Toggle Pies/Metros del dashboard
@@ -2360,6 +3324,28 @@ void hmi_extra_panels_apply_lang(void)
     if (s_encoder_btn_meters) {
         lv_obj_t *lbl = lv_obj_get_child(s_encoder_btn_meters, 0);
         if (lbl) lv_label_set_text(lbl, g_lang->btn_meters);
+    }
+
+    // Caption Robot/Console Voltage|Percent: lang_apply() ya puso la variante
+    // "Voltage" via L->lbl_robot_voltage/lbl_console_voltage; si el usuario
+    // esta en modo porcentaje hay que pisarla con la variante correcta en el
+    // idioma nuevo.
+    if (g_bat_display_percent) {
+        if (objects.robot_voltage_caption)   lv_label_set_text(objects.robot_voltage_caption,   g_lang->lbl_robot_percent);
+        if (objects.console_voltage_caption) lv_label_set_text(objects.console_voltage_caption, g_lang->lbl_console_percent);
+    }
+
+    // Estado de conexion BLE (Settings > Bluetooth): Conectado/Sin conexion
+    // depende de s_bt_connected, no hay que esperar a que llegue de nuevo
+    // HMI_REG_BLUETOOTH_INDICATOR.
+    if (objects.bt_panel_status_label) {
+        lv_label_set_text(objects.bt_panel_status_label, bt_status_text(s_bt_connected));
+    }
+
+    // Estado de OTA_STATUS de la consola (System Info > Update > Console):
+    // si ya llego algun valor, re-traducirlo en el idioma nuevo.
+    if (s_console_ota_last_value >= 0 && objects.console_ota_status_label) {
+        lv_label_set_text(objects.console_ota_status_label, console_ota_status_text(s_console_ota_last_value));
     }
 
     // Formula del footer de Encoder (numeros + texto en el idioma actual)
@@ -2373,6 +3359,13 @@ void hmi_extra_panels_apply_lang(void)
     } else if (g_play_state == AUTO_PLAY_PAUSED) {
         modes_giro_automatico_set_state(g_lang->btn_reanudar_auto_rotation, true);
     }
+
+    // Panel de manejo (logo/combo joystick) — textos fijos que no dependen
+    // de ningun estado, solo re-traducirlos.
+    if (s_bigview_distance_caption) lv_label_set_text(s_bigview_distance_caption, g_lang->panel_drive_distance_caption);
+    if (s_bigview_trace_caption)    lv_label_set_text(s_bigview_trace_caption, g_lang->panel_drive_trace_caption);
+    if (s_bigview_robot_batt_caption)   lv_label_set_text(s_bigview_robot_batt_caption, g_lang->panel_drive_robot_batt);
+    if (s_bigview_console_batt_caption) lv_label_set_text(s_bigview_console_batt_caption, g_lang->panel_drive_console_batt);
 }
 
 // Forward declarations
@@ -2787,6 +3780,360 @@ static void dn_open(void)
     lv_keyboard_set_textarea(kb, ta);
     lv_obj_set_size(kb, LV_HOR_RES, 220);
     lv_obj_align(kb, LV_ALIGN_BOTTOM_MID, 0, 0);
+}
+
+// ---- Settings/Update > WiFi editor (SSID + contrasena, texto libre, con
+// escaneo opcional + verificacion por conexion de prueba antes de guardar)
+// ----
+static lv_obj_t *s_wifi_panel      = NULL;
+static lv_obj_t *s_wifi_ssid_ta    = NULL;
+static lv_obj_t *s_wifi_pass_ta    = NULL;
+static lv_obj_t *s_wifi_kb         = NULL;
+static lv_obj_t *s_wifi_scan_btn   = NULL;
+static lv_obj_t *s_wifi_save_btn   = NULL;
+static lv_obj_t *s_wifi_status_lbl = NULL;
+static lv_obj_t *s_wifi_scan_list  = NULL;
+
+// Margen antes de escanear: hay que desconectar cualquier intento de
+// conexion en curso antes de esp_wifi_scan_start() (ver s_wifi_scan_active
+// mas arriba), y darle un instante a que "asiente".
+static lv_timer_t *s_wifi_scan_delay_timer = NULL;
+#define WIFI_SCAN_DELAY_MS 300
+
+static void wifi_editor_set_busy(bool busy)
+{
+    if (s_wifi_scan_btn) { if (busy) lv_obj_add_state(s_wifi_scan_btn, LV_STATE_DISABLED); else lv_obj_remove_state(s_wifi_scan_btn, LV_STATE_DISABLED); }
+    if (s_wifi_save_btn) { if (busy) lv_obj_add_state(s_wifi_save_btn, LV_STATE_DISABLED); else lv_obj_remove_state(s_wifi_save_btn, LV_STATE_DISABLED); }
+}
+
+// Prende el WiFi por el MISMO camino que el boton "Activar WiFi" de Update
+// (hmi_wifi_set_enabled), asi el boton queda sincronizado — en vez de
+// prender el driver "por atras" con wifi_driver_ensure_ready(). Si ya estaba
+// prendido de antes (uso real del WiFi de actualizacion), no marca
+// s_wifi_enabled_by_editor: no es este dialogo quien decide cuando apagarlo.
+static void wifi_editor_ensure_radio_on(void)
+{
+    if (!s_wifi_enabled) {
+        // Se arma ANTES de prender, no despues: WIFI_EVENT_STA_START se
+        // procesa en la tarea del event loop de ESP-IDF, que podria correr
+        // antes de que esta funcion termine — hmi_wifi_set_enabled(true)
+        // tiene que encontrar el flag ya en true para no auto-conectar.
+        s_wifi_enabled_by_editor = true;
+        hmi_wifi_set_enabled(true);
+    }
+}
+
+// Definida junto con el resto del escaneo, mas abajo — declarada aca porque
+// wifi_editor_close() (arriba de esa seccion en el archivo) la necesita.
+static void wifi_editor_scan_session_end(void);
+
+static void wifi_editor_close(void)
+{
+    if (s_wifi_scan_delay_timer) { lv_timer_delete(s_wifi_scan_delay_timer); s_wifi_scan_delay_timer = NULL; }
+    if (s_wifi_scan_active) wifi_editor_scan_session_end();
+    if (s_wifi_enabled_by_editor) {
+        s_wifi_enabled_by_editor = false;
+        hmi_wifi_set_enabled(false);
+    }
+    if (s_wifi_panel) {
+        lv_obj_del(s_wifi_panel);
+        s_wifi_panel = NULL; s_wifi_ssid_ta = NULL; s_wifi_pass_ta = NULL; s_wifi_kb = NULL;
+        s_wifi_scan_btn = NULL; s_wifi_save_btn = NULL; s_wifi_status_lbl = NULL; s_wifi_scan_list = NULL;
+    }
+}
+
+// Guarda directo — sin conectar de prueba primero: si la red que se esta
+// guardando no esta al alcance en este momento (router apagado, se esta
+// configurando de antemano, era para pruebas y ya no existe, etc.) igual
+// queda guardada, reemplazando la anterior. Si el WiFi de actualizacion ya
+// esta activado, ademas aplica la red nueva de una (reconecta con las
+// credenciales recien guardadas), pero eso no condiciona el guardado.
+static void wifi_editor_save_cb(lv_event_t *e)
+{
+    (void)e;
+    if (!s_wifi_ssid_ta || !s_wifi_pass_ta) return;
+    const char *ssid = lv_textarea_get_text(s_wifi_ssid_ta);
+    const char *pass = lv_textarea_get_text(s_wifi_pass_ta);
+    if (ssid[0] == '\0') { wifi_editor_close(); return; }
+
+    dev_nvs_write_wifi_ssid(ssid);
+    dev_nvs_write_wifi_pass(pass);
+    if (objects.settings_wifi_ssid_value) lv_label_set_text(objects.settings_wifi_ssid_value, ssid);
+
+    if (s_wifi_enabled) {
+        wifi_config_t wifi_config = {0};
+        strncpy((char *)wifi_config.sta.ssid, ssid, sizeof(wifi_config.sta.ssid) - 1);
+        strncpy((char *)wifi_config.sta.password, pass, sizeof(wifi_config.sta.password) - 1);
+        esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
+        esp_wifi_disconnect();
+        esp_wifi_connect();
+    }
+
+    hmi_log(LOG_OK, "WiFi actualizado");
+    wifi_editor_close();
+}
+
+static void wifi_editor_cancel_cb(lv_event_t *e) { (void)e; wifi_editor_close(); }
+
+// Un solo teclado compartido entre los 2 campos: se re-liga al campo que
+// tiene el foco en ese momento.
+static void wifi_editor_field_focus_cb(lv_event_t *e)
+{
+    lv_obj_t *ta = lv_event_get_target(e);
+    if (s_wifi_kb) lv_keyboard_set_textarea(s_wifi_kb, ta);
+}
+
+// Fila superior de la lista de resultados: vuelve a carga manual sin elegir
+// ninguna red (redes ocultas, o el usuario prefiere escribir el nombre).
+static void wifi_editor_scan_cancel_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_wifi_scan_list) lv_obj_add_flag(s_wifi_scan_list, LV_OBJ_FLAG_HIDDEN);
+    if (s_wifi_kb) lv_obj_remove_flag(s_wifi_kb, LV_OBJ_FLAG_HIDDEN);
+    if (s_wifi_status_lbl) lv_label_set_text(s_wifi_status_lbl, "");
+    wifi_editor_set_busy(false);
+}
+
+static void wifi_editor_scan_row_clicked_cb(lv_event_t *e)
+{
+    lv_obj_t *btn = lv_event_get_target(e);
+    if (!s_wifi_scan_list || !s_wifi_ssid_ta) return;
+    const char *ssid = lv_list_get_button_text(s_wifi_scan_list, btn);
+    lv_textarea_set_text(s_wifi_ssid_ta, ssid);
+    lv_obj_add_flag(s_wifi_scan_list, LV_OBJ_FLAG_HIDDEN);
+    if (s_wifi_kb && s_wifi_pass_ta) {
+        lv_obj_remove_flag(s_wifi_kb, LV_OBJ_FLAG_HIDDEN);
+        lv_keyboard_set_textarea(s_wifi_kb, s_wifi_pass_ta);
+    }
+    if (s_wifi_status_lbl) lv_label_set_text(s_wifi_status_lbl, "");
+    wifi_editor_set_busy(false);
+}
+
+// Cierra la "sesion" de escaneo: deja de suprimir el auto-reconectar del
+// WiFi de actualizacion y, si sigue activado (y no hay una verificacion en
+// curso, que maneja su propia conexion), retoma el intento normal a la red
+// guardada — lo mismo que hacia solo antes de que el editor pidiera escanear.
+static void wifi_editor_scan_session_end(void)
+{
+    s_wifi_scan_active = false;
+    if (s_wifi_enabled) {
+        esp_wifi_connect();
+    }
+}
+
+static void wifi_editor_scan_done(void)
+{
+    if (!s_wifi_panel || !s_wifi_scan_list) { wifi_editor_scan_session_end(); return; } // el dialogo se cerro mientras escaneaba
+
+    uint16_t num = 0;
+    esp_wifi_scan_get_ap_num(&num);
+
+    lv_obj_clean(s_wifi_scan_list);
+    lv_obj_t *manual_row = lv_list_add_button(s_wifi_scan_list, LV_SYMBOL_EDIT, g_lang->btn_wifi_scan_manual);
+    lv_obj_add_event_cb(manual_row, wifi_editor_scan_cancel_cb, LV_EVENT_CLICKED, NULL);
+
+    uint16_t shown = 0;
+    if (num > 0) {
+        if (num > 20) num = 20; // limite razonable de lista/memoria
+        wifi_ap_record_t *recs = malloc(sizeof(wifi_ap_record_t) * num);
+        if (recs) {
+            esp_wifi_scan_get_ap_records(&num, recs);
+            for (int i = 0; i < num; i++) {
+                if (recs[i].ssid[0] == '\0') continue; // red oculta, sin nombre que listar
+                lv_obj_t *row = lv_list_add_button(s_wifi_scan_list, LV_SYMBOL_WIFI, (const char *)recs[i].ssid);
+                lv_obj_add_event_cb(row, wifi_editor_scan_row_clicked_cb, LV_EVENT_CLICKED, NULL);
+                shown++;
+            }
+            free(recs);
+        }
+    }
+
+    if (s_wifi_status_lbl) {
+        if (shown > 0) {
+            char buf[48];
+            snprintf(buf, sizeof(buf), g_lang->lbl_wifi_scan_found_fmt, (int)shown);
+            lv_label_set_text(s_wifi_status_lbl, buf);
+        } else {
+            lv_label_set_text(s_wifi_status_lbl, g_lang->lbl_wifi_scan_empty);
+        }
+    }
+    wifi_editor_set_busy(false);
+    wifi_editor_scan_session_end();
+}
+
+static void wifi_editor_do_scan_start(void)
+{
+    if (!s_wifi_panel) { wifi_editor_scan_session_end(); return; } // el dialogo se cerro mientras esperaba
+
+    esp_err_t err = esp_wifi_scan_start(NULL, false);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "esp_wifi_scan_start fallo: %s", esp_err_to_name(err));
+        if (s_wifi_status_lbl) lv_label_set_text(s_wifi_status_lbl, g_lang->lbl_wifi_scan_busy);
+        if (s_wifi_scan_list) lv_obj_add_flag(s_wifi_scan_list, LV_OBJ_FLAG_HIDDEN);
+        if (s_wifi_kb) lv_obj_remove_flag(s_wifi_kb, LV_OBJ_FLAG_HIDDEN);
+        wifi_editor_set_busy(false);
+        wifi_editor_scan_session_end();
+    }
+    // si arranco bien, s_wifi_scan_active sigue en true hasta wifi_editor_scan_done()
+}
+
+static void wifi_editor_scan_delay_cb(lv_timer_t *t)
+{
+    lv_timer_delete(t);
+    s_wifi_scan_delay_timer = NULL;
+    wifi_editor_do_scan_start();
+}
+
+static void wifi_editor_scan_start_cb(lv_event_t *e)
+{
+    (void)e;
+    wifi_editor_ensure_radio_on();
+
+    if (s_wifi_kb) lv_obj_add_flag(s_wifi_kb, LV_OBJ_FLAG_HIDDEN);
+    if (s_wifi_scan_list) {
+        lv_obj_clean(s_wifi_scan_list);
+        lv_obj_remove_flag(s_wifi_scan_list, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_wifi_status_lbl) lv_label_set_text(s_wifi_status_lbl, g_lang->lbl_wifi_scanning);
+    wifi_editor_set_busy(true);
+
+    // El WiFi de actualizacion, una vez activado, reintenta solo conectarse
+    // a la red guardada de fondo — si esa red no esta al alcance, el radio
+    // puede estar "conectando" casi todo el tiempo, y esp_wifi_scan_start()
+    // falla justo en ese estado. Cortar ese intento y esperar un margen
+    // antes de escanear evita el "escaneo no disponible" (tambien cubre el
+    // caso mas raro de que el radio, remoto por SDIO a un coprocesador
+    // esp_hosted, todavia no hubiera terminado de arrancar).
+    s_wifi_scan_active = true;
+    esp_wifi_disconnect(); // no-op si no habia nada conectando/conectado
+
+    if (s_wifi_scan_delay_timer) lv_timer_delete(s_wifi_scan_delay_timer);
+    s_wifi_scan_delay_timer = lv_timer_create(wifi_editor_scan_delay_cb, WIFI_SCAN_DELAY_MS, NULL);
+}
+
+void hmi_open_wifi_editor(void)
+{
+    if (s_wifi_panel) return;
+
+    s_wifi_enabled_by_editor = false; // defensivo: cada apertura arranca sin arrastrar estado
+    s_wifi_scan_active       = false;
+
+    lv_obj_t *p = lv_obj_create(lv_layer_top());
+    lv_obj_set_pos(p, 0, 0);
+    lv_obj_set_size(p, LV_HOR_RES, LV_VER_RES);
+    lv_obj_set_style_bg_color(p, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(p, LV_OPA_70, 0);
+    lv_obj_set_style_border_width(p, 0, 0);
+    lv_obj_set_style_radius(p, 0, 0);
+    lv_obj_remove_flag(p, LV_OBJ_FLAG_SCROLLABLE);
+    s_wifi_panel = p;
+
+    lv_obj_t *title = lv_label_create(p);
+    lv_label_set_text(title, g_lang->title_wifi_editor);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(title, hmi_theme_accent(), 0);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
+
+    lv_obj_t *ssid_lbl = lv_label_create(p);
+    lv_label_set_text(ssid_lbl, g_lang->lbl_wifi_ssid);
+    lv_obj_set_style_text_font(ssid_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(ssid_lbl, lv_color_hex(0xffaaaaaa), 0);
+    lv_obj_align(ssid_lbl, LV_ALIGN_TOP_MID, -220, 38);
+
+    lv_obj_t *ssid_ta = lv_textarea_create(p);
+    s_wifi_ssid_ta = ssid_ta;
+    lv_textarea_set_one_line(ssid_ta, true);
+    lv_textarea_set_max_length(ssid_ta, WIFI_SSID_MAX - 1);
+    char cur_ssid[WIFI_SSID_MAX];
+    dev_nvs_read_wifi_ssid(cur_ssid, sizeof(cur_ssid));
+    lv_textarea_set_text(ssid_ta, cur_ssid[0] ? cur_ssid : WIFI_SSID);
+    lv_obj_set_size(ssid_ta, 300, 40);
+    lv_obj_align(ssid_ta, LV_ALIGN_TOP_MID, -80, 56);
+    lv_obj_set_style_text_font(ssid_ta, &lv_font_montserrat_18, 0);
+    lv_obj_remove_flag(ssid_ta, LV_OBJ_FLAG_SCROLLABLE); // sin esto, LVGL intenta hacer scroll al campo al escribir
+    lv_obj_add_event_cb(ssid_ta, wifi_editor_field_focus_cb, LV_EVENT_FOCUSED, NULL);
+
+    lv_obj_t *scan_btn = lv_button_create(p);
+    s_wifi_scan_btn = scan_btn;
+    lv_obj_set_size(scan_btn, 150, 40);
+    lv_obj_align(scan_btn, LV_ALIGN_TOP_MID, 155, 56);
+    lv_obj_set_style_bg_color(scan_btn, lv_color_hex(0x333333), 0);
+    lv_obj_set_style_radius(scan_btn, 8, 0);
+    lv_obj_set_style_shadow_opa(scan_btn, 0, 0);
+    lv_obj_add_event_cb(scan_btn, wifi_editor_scan_start_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *scan_lbl = lv_label_create(scan_btn);
+    lv_label_set_text(scan_lbl, g_lang->btn_wifi_scan);
+    lv_obj_set_style_text_font(scan_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_center(scan_lbl);
+
+    lv_obj_t *pass_lbl = lv_label_create(p);
+    lv_label_set_text(pass_lbl, g_lang->lbl_wifi_pass);
+    lv_obj_set_style_text_font(pass_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(pass_lbl, lv_color_hex(0xffaaaaaa), 0);
+    lv_obj_align(pass_lbl, LV_ALIGN_TOP_MID, -220, 106);
+
+    lv_obj_t *pass_ta = lv_textarea_create(p);
+    s_wifi_pass_ta = pass_ta;
+    lv_textarea_set_one_line(pass_ta, true);
+    lv_textarea_set_max_length(pass_ta, WIFI_PASS_MAX - 1);
+    char cur_pass[WIFI_PASS_MAX];
+    dev_nvs_read_wifi_pass(cur_pass, sizeof(cur_pass));
+    lv_textarea_set_text(pass_ta, cur_pass[0] ? cur_pass : WIFI_PASS);
+    lv_obj_set_size(pass_ta, 460, 40);
+    lv_obj_align(pass_ta, LV_ALIGN_TOP_MID, 0, 124);
+    lv_obj_set_style_text_font(pass_ta, &lv_font_montserrat_18, 0);
+    lv_obj_remove_flag(pass_ta, LV_OBJ_FLAG_SCROLLABLE); // sin esto, LVGL intenta hacer scroll al campo al escribir
+    lv_obj_add_event_cb(pass_ta, wifi_editor_field_focus_cb, LV_EVENT_FOCUSED, NULL);
+
+    lv_obj_t *save = lv_button_create(p);
+    s_wifi_save_btn = save;
+    lv_obj_set_size(save, 140, 40);
+    lv_obj_align(save, LV_ALIGN_TOP_MID, -76, 174);
+    lv_obj_set_style_bg_color(save, hmi_theme_accent(), 0);
+    lv_obj_set_style_radius(save, 8, 0);
+    lv_obj_set_style_shadow_opa(save, 0, 0);
+    lv_obj_add_event_cb(save, wifi_editor_save_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *save_lbl = lv_label_create(save);
+    lv_label_set_text(save_lbl, g_lang->btn_save);
+    lv_obj_set_style_text_color(save_lbl, lv_color_hex(0x1a1a1a), 0);
+    lv_obj_set_style_text_font(save_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_center(save_lbl);
+
+    lv_obj_t *cancel = lv_button_create(p);
+    lv_obj_set_size(cancel, 140, 40);
+    lv_obj_align(cancel, LV_ALIGN_TOP_MID, 76, 174);
+    lv_obj_set_style_bg_color(cancel, lv_color_hex(0x333333), 0);
+    lv_obj_set_style_radius(cancel, 8, 0);
+    lv_obj_set_style_shadow_opa(cancel, 0, 0);
+    lv_obj_add_event_cb(cancel, wifi_editor_cancel_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *cancel_lbl = lv_label_create(cancel);
+    lv_label_set_text(cancel_lbl, g_lang->btn_cancel);
+    lv_obj_set_style_text_font(cancel_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_center(cancel_lbl);
+
+    lv_obj_t *status_lbl = lv_label_create(p);
+    s_wifi_status_lbl = status_lbl;
+    lv_obj_set_size(status_lbl, LV_HOR_RES - 40, LV_SIZE_CONTENT);
+    lv_obj_set_style_text_align(status_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(status_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(status_lbl, lv_color_hex(0xffaaaaaa), 0);
+    lv_obj_align(status_lbl, LV_ALIGN_TOP_MID, 0, 210);
+    lv_label_set_text(status_lbl, "");
+
+    lv_obj_t *kb = lv_keyboard_create(p);
+    s_wifi_kb = kb;
+    lv_keyboard_set_textarea(kb, ssid_ta);
+    lv_obj_set_size(kb, LV_HOR_RES, 220);
+    lv_obj_align(kb, LV_ALIGN_BOTTOM_MID, 0, 0);
+
+    // Lista de resultados de escaneo — ocupa el mismo lugar que el teclado
+    // (no hace falta escribir mientras se elige de la lista), oculta hasta
+    // que se toca "Buscar redes".
+    lv_obj_t *list = lv_list_create(p);
+    s_wifi_scan_list = list;
+    lv_obj_set_size(list, LV_HOR_RES, 220);
+    lv_obj_align(list, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_add_flag(list, LV_OBJ_FLAG_HIDDEN);
 }
 
 // ---- PIN keypad ----
@@ -4476,12 +5823,6 @@ static void lock_screen_create(void)
         lv_obj_set_style_text_align(greet, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_align(greet, LV_ALIGN_CENTER, 0, 30);
 
-        lv_obj_t *sub = lv_label_create(panel);
-        lv_label_set_text(sub, g_lang->lbl_lock_signing_in);
-        lv_obj_set_style_text_font(sub, &lv_font_montserrat_14, 0);
-        lv_obj_set_style_text_color(sub, lv_color_hex(LS_COL_TXT_DIM), 0);
-        lv_obj_align(sub, LV_ALIGN_CENTER, 0, 60);
-
         lv_obj_fade_in(panel, 400, 0);
         lv_timer_t *t = lv_timer_create(ls_unlock_timer_cb, 2500, NULL);
         lv_timer_set_repeat_count(t, 1);
@@ -4759,6 +6100,154 @@ static void bat_blink_border_cb(lv_timer_t *timer)
     }
 }
 
+// --- Cache de registros que la consola manda una sola vez al conectar ---
+// Si llegan mientras ui_init() todavia no termino de construir los widgets
+// (splash, pantalla de bloqueo, etc.), objects.xxx sigue siendo NULL y el
+// valor se pierde para siempre porque nadie lo vuelve a mandar. Se guarda
+// el valor crudo aqui y se reaplica una vez desde app_main() (ver
+// hmi_reapply_cached_boot_regs()) apenas panels_startup_init() termina.
+static int32_t s_cached_robot_serial = -1;
+static int32_t s_cached_robot_model  = -1;
+static int32_t s_cached_fw_version   = -1;
+
+static void apply_robot_serial(int32_t value)
+{
+    char buff[30];
+    snprintf(buff, sizeof(buff), "Robot S/N   :  RD90R-%06ld", value);
+    set_var_robot_serial(buff);
+
+    HMI_LV_SAFE_OBJ(objects.robot_serial_number,
+        lv_label_set_text_static(objects.robot_serial_number, get_var_robot_serial()));
+
+    char sn_buff[20];
+    snprintf(sn_buff, sizeof(sn_buff), "RD90R-%06ld", value);
+    HMI_LV_SAFE_OBJ(objects.sysinfo_robot_serial_value,
+        lv_label_set_text(objects.sysinfo_robot_serial_value, sn_buff));
+}
+
+static void apply_robot_model(int32_t value)
+{
+    static const char *model_names[] = { "RD80", "RD90", "RD100" };
+    const char *model = (value >= 0 && value < 3) ? model_names[value] : "RD??";
+    HMI_LV_LOCKED(
+        if (objects.robot_model_label) {
+            lv_label_set_text(objects.robot_model_label, model);
+        }
+        if (objects.robot_model_pill) {
+            lv_obj_remove_flag(objects.robot_model_pill, LV_OBJ_FLAG_HIDDEN);
+        }
+        if (s_bigview_robot_model_label) {
+            lv_label_set_text(s_bigview_robot_model_label, model);
+            lv_obj_remove_flag(s_bigview_robot_model_label, LV_OBJ_FLAG_HIDDEN);
+        }
+    );
+}
+
+static void apply_fw_version(int32_t value)
+{
+    uint8_t major = (value >> 16) & 0xFF;
+    uint8_t minor = (value >> 8)  & 0xFF;
+    uint8_t patch = value & 0xFF;
+    char buff[40];
+    snprintf(buff, sizeof(buff), "Console firmware: v%u.%u.%u", major, minor, patch);
+    HMI_LV_SAFE_OBJ(objects.console_fw_version_label,
+        lv_label_set_text(objects.console_fw_version_label, buff));
+}
+
+void hmi_reapply_cached_boot_regs(void)
+{
+    if (s_cached_robot_serial >= 0) apply_robot_serial(s_cached_robot_serial);
+    if (s_cached_robot_model  >= 0) apply_robot_model(s_cached_robot_model);
+    if (s_cached_fw_version   >= 0) apply_fw_version(s_cached_fw_version);
+}
+
+//*************************************************************************************
+// Settings > Camera: interruptor de 3 posiciones para RL1 (solo reversa).
+// ON = fuerza RL1 encendido sin importar el estado del motor.
+// OFF = desactivado, no manda nada (ni al elegir esta opcion ni por reversa).
+// AUTO = comportamiento de siempre, sigue la reversa (default).
+//*************************************************************************************
+typedef enum { RL1_MODE_ON = 0, RL1_MODE_OFF, RL1_MODE_AUTO } rl1_mode_t;
+static rl1_mode_t s_rl1_mode = RL1_MODE_OFF;
+static bool s_rl1_sent = false;           // ultimo valor de RL1 realmente mandado
+static bool s_last_reversing_state = false; // ultimo estado de reversa conocido (para resincronizar al volver a AUTO)
+
+// Combo para abrir el panel de manejo: reversa (HMI_REG_MOTOR) + joystick
+// de servo hacia abajo (HMI_REG_JOY2), AMBOS a la vez. Se llama desde los
+// dos handlers cada vez que cualquiera de las dos condiciones cambia.
+static bool s_servo_down_state = false;
+static bool s_combo_open_fired = false; // evita reabrir en cada mensaje mientras se sostienen ambos
+static void bigview_check_reverse_servo_combo(void)
+{
+    bool both = s_last_reversing_state && s_servo_down_state;
+    if (both && !s_combo_open_fired) {
+        s_combo_open_fired = true;
+        HMI_LV_LOCKED(encoder_bigview_open());
+    } else if (!both) {
+        s_combo_open_fired = false;
+    }
+}
+
+static void camera_rl1_mode_style_update(void)
+{
+    hmi_style_btn(objects.cam_rl1_btn_on,   s_rl1_mode == RL1_MODE_ON);
+    hmi_style_btn(objects.cam_rl1_btn_off,  s_rl1_mode == RL1_MODE_OFF);
+    hmi_style_btn(objects.cam_rl1_btn_auto, s_rl1_mode == RL1_MODE_AUTO);
+}
+
+static void camera_rl1_on_cb(lv_event_t *e)
+{
+    (void)e;
+    s_rl1_mode = RL1_MODE_ON;
+    s_rl1_sent = true;
+    hmi_send_data(HMI_REG_RL1, 1);
+    camera_rl1_mode_style_update();
+}
+
+static void camera_rl1_off_cb(lv_event_t *e)
+{
+    (void)e;
+    // Apaga el rele de una (no lo deja en lo que haya quedado) y despues
+    // ya no vuelve a mandar nada mientras siga en OFF, aunque el robot
+    // entre/salga de reversa.
+    s_rl1_mode = RL1_MODE_OFF;
+    s_rl1_sent = false;
+    hmi_send_data(HMI_REG_RL1, 0);
+    camera_rl1_mode_style_update();
+}
+
+static void camera_rl1_auto_cb(lv_event_t *e)
+{
+    (void)e;
+    s_rl1_mode = RL1_MODE_AUTO;
+    // Resincroniza de inmediato con el estado real de reversa, por si
+    // quedo desfasado mientras estaba en ON/OFF.
+    if (s_last_reversing_state != s_rl1_sent) {
+        s_rl1_sent = s_last_reversing_state;
+        hmi_send_data(HMI_REG_RL1, s_rl1_sent ? 1 : 0);
+    }
+    camera_rl1_mode_style_update();
+}
+
+// Cablea los 3 botones y deja el estado inicial (AUTO) — llamar una vez
+// desde app_main() junto con el resto del cableado post ui_init().
+static void camera_rl1_mode_wire(void)
+{
+    if (objects.cam_rl1_btn_on)
+        lv_obj_add_event_cb(objects.cam_rl1_btn_on, camera_rl1_on_cb, LV_EVENT_CLICKED, NULL);
+    if (objects.cam_rl1_btn_off)
+        lv_obj_add_event_cb(objects.cam_rl1_btn_off, camera_rl1_off_cb, LV_EVENT_CLICKED, NULL);
+    if (objects.cam_rl1_btn_auto)
+        lv_obj_add_event_cb(objects.cam_rl1_btn_auto, camera_rl1_auto_cb, LV_EVENT_CLICKED, NULL);
+    camera_rl1_mode_style_update();
+}
+
+// Centro real del joystick de servo (JOY2) en reposo — confirmado en
+// pruebas (~2132, no 0) — y zona muerta a partir de ahi para considerar
+// que se empujo hacia abajo (abajo = Y aumenta).
+#define JOY2_Y_CENTER      2132
+#define JOY_SERVO_DEADZONE 300
+
 void hmi_handle_reg(uint8_t reg, int32_t value)
 {
     switch (reg)
@@ -4772,8 +6261,24 @@ void hmi_handle_reg(uint8_t reg, int32_t value)
         } else if (s_robot_connected && value == 0) {
             s_robot_connected = false;
             hmi_log(LOG_WARN, "Robot disconnected");
+            // El pill "RD.." depende del robot conectado: si se desconecta,
+            // se oculta igual que se apaga el LED verde. Reaparece cuando
+            // llegue el proximo HMI_REG_ROBOT_MODEL (0x25) tras la
+            // reconexion. Solo se dispara en el flanco de desconexion (no
+            // en cada mensaje con value=0) para no ocultarlo por ruido.
+            HMI_LV_SAFE_OBJ(objects.robot_model_pill,
+                lv_obj_add_flag(objects.robot_model_pill, LV_OBJ_FLAG_HIDDEN));
+            HMI_LV_SAFE_OBJ(s_bigview_robot_model_label,
+                lv_obj_add_flag(s_bigview_robot_model_label, LV_OBJ_FLAG_HIDDEN));
+            // El S/N tambien queda obsoleto al desconectar: limpiarlo para
+            // no mostrar el ultimo valor de un robot que ya no esta.
+            HMI_LV_SAFE_OBJ(objects.sysinfo_robot_serial_value,
+                lv_label_set_text(objects.sysinfo_robot_serial_value, "---"));
+            HMI_LV_SAFE_OBJ(objects.robot_serial_number,
+                lv_label_set_text(objects.robot_serial_number, "---"));
         }
         HMI_LV_SAFE_OBJ(objects.led_online, lv_led_set_brightness(objects.led_online, (uint8_t)value));
+        HMI_LV_SAFE_OBJ(s_bigview_led_online, lv_led_set_brightness(s_bigview_led_online, (uint8_t)value));
         ESP_LOGI(TAG, "HMI_REG_ONLINE_INDICATOR: %d", value);
         break;
     }
@@ -4781,7 +6286,39 @@ void hmi_handle_reg(uint8_t reg, int32_t value)
     case HMI_REG_BLUETOOTH_INDICATOR:
     {
         HMI_LV_SAFE_OBJ(objects.led_bluetooth, lv_led_set_brightness(objects.led_bluetooth, (uint8_t)value));
+        HMI_LV_SAFE_OBJ(s_bigview_led_bt, lv_led_set_brightness(s_bigview_led_bt, (uint8_t)value));
+        HMI_LV_SAFE_OBJ(objects.bt_panel_led, lv_led_set_brightness(objects.bt_panel_led, (uint8_t)value));
+        s_bt_connected = (value != 0);
+        HMI_LV_SAFE_OBJ(objects.bt_panel_status_label,
+            lv_label_set_text(objects.bt_panel_status_label, bt_status_text(s_bt_connected)));
+        if (!s_bt_connected) {
+            s_bt_mac_hi = 0;
+            HMI_LV_SAFE_OBJ(objects.bt_panel_mac_label, lv_label_set_text(objects.bt_panel_mac_label, "---"));
+        }
         ESP_LOGI(TAG, "HMI_REG_BLUETOOTH_INDICATOR: %d", (uint8_t)value);
+        break;
+    }
+
+    case HMI_REG_ROBOT_LED_CHANGED:
+    {
+        // Brillo del LED del robot cambiado del lado de la consola (ej. un
+        // boton fisico) — solo actualiza el slider/label en pantalla, NO
+        // reenvia el registro (action_robot_brightness_changed ya lo manda
+        // cuando el cambio sale de aca; reenviarlo entraria en loop).
+        int32_t slider_value = (value * 100 + 511) / 1023; // redondeado, no truncado
+        HMI_LV_LOCKED(
+            if (objects.obj16) {
+                lv_slider_set_value(objects.obj16, slider_value, LV_ANIM_OFF);
+            }
+            if (objects.brightness_label) {
+                char buff[16];
+                snprintf(buff, sizeof(buff), "%d %%", (int)slider_value);
+                set_var_brightness(buff);
+                lv_label_set_text_static(objects.brightness_label, get_var_brightness());
+            }
+            hmi_bigview_led_level_refresh();
+        );
+        ESP_LOGI(TAG, "HMI_REG_ROBOT_LED_CHANGED: %d", (int)value);
         break;
     }
 
@@ -4827,6 +6364,7 @@ void hmi_handle_reg(uint8_t reg, int32_t value)
         } else {
             ESP_LOGE(TAG, ">>> OBJECTS NULOS - UI no actualiza");
         }
+        HMI_LV_SAFE_OBJ(s_bigview_console_batt_label, bigview_battery_refresh());
         break;
     }
 
@@ -4923,6 +6461,7 @@ void hmi_handle_reg(uint8_t reg, int32_t value)
                     lv_obj_set_style_bg_color(objects.obj0, hmi_theme_bg_topbar(), LV_PART_MAIN | LV_STATE_DEFAULT);
                 }
             }
+            bigview_battery_refresh();
         );
 
         ESP_LOGI(TAG, "HMI_REG_ROBOT_VOLTAGE: %d", value);
@@ -4937,6 +6476,8 @@ void hmi_handle_reg(uint8_t reg, int32_t value)
         set_var_angle_x_value(buff);
 
         HMI_LV_SAFE_OBJ(objects.angle_x, lv_label_set_text_static(objects.angle_x, get_var_angle_x_value()));
+        // Grafico del panel de manejo desactivado para X por ahora — solo
+        // se pidio ver Y. La tarjeta TILT arriba sigue mostrando X normal.
         ESP_LOGI(TAG, "HMI_REG_ANGLE_X: %d", value);
         break;
     }
@@ -4949,6 +6490,11 @@ void hmi_handle_reg(uint8_t reg, int32_t value)
         set_var_angle_y_value(buff);
 
         HMI_LV_SAFE_OBJ(objects.angle_y, lv_label_set_text_static(objects.angle_y, get_var_angle_y_value()));
+        // Solo cachea el valor — el trazo lo empuja hmi_encoder_set_raw()
+        // cuando el encoder avanza, no la llegada de este registro.
+        // *** PRUEBA: sin decimal, entero truncado (value_f) en vez de
+        // (float)value/100.0f — para comparar como se ve el dibujo. ***
+        s_bigview_current_pitch = (float)value_f;
         ESP_LOGI(TAG, "HMI_REG_ANGLE_Y: %d", value);
         break;
     }
@@ -4960,25 +6506,51 @@ void hmi_handle_reg(uint8_t reg, int32_t value)
         set_var_bluetooth_password_string(buff);
 
         HMI_LV_SAFE_OBJ(objects.bluetooth_password_label, lv_label_set_text_static(objects.bluetooth_password_label, get_var_bluetooth_password_string()));
+        HMI_LV_SAFE_OBJ(objects.bt_panel_password_label, lv_label_set_text_static(objects.bt_panel_password_label, get_var_bluetooth_password_string()));
         ESP_LOGI(TAG, "HMI_REG_BLUETOOTH_PASSWORD: %06d", value);
         break;
     }
 
     case HMI_REG_ROBOT_SERIAL:
     {
-        char buff[30];
-        snprintf(buff, sizeof(buff), "Robot S/N   :  RD90R-%06ld", value);
-        set_var_robot_serial(buff);
-
-        HMI_LV_SAFE_OBJ(objects.robot_serial_number,
-            lv_label_set_text_static(objects.robot_serial_number, get_var_robot_serial()));
-
-        char sn_buff[20];
-        snprintf(sn_buff, sizeof(sn_buff), "RD90R-%06ld", value);
-        HMI_LV_SAFE_OBJ(objects.sysinfo_robot_serial_value,
-            lv_label_set_text(objects.sysinfo_robot_serial_value, sn_buff));
-
+        s_cached_robot_serial = value;
+        apply_robot_serial(value);
         ESP_LOGI(TAG, "HMI_REG_ROBOT_SERIAL: %06ld", value);
+        break;
+    }
+
+    case HMI_REG_ROBOT_MODEL:
+    {
+        // Pill "RD.." de la barra superior (antes de Online) — arranca oculto
+        // y aparece con el primer valor que llega.
+        s_cached_robot_model = value;
+        apply_robot_model(value);
+        ESP_LOGI(TAG, "HMI_REG_ROBOT_MODEL: %d", (int)value);
+        break;
+    }
+
+    case HMI_REG_BLUETOOTH_MAC_HI:
+    {
+        // Bytes 5-4 de la MAC — se cachean y se muestran recien cuando
+        // llegue el LO (bytes 3-0), que la consola manda justo despues.
+        s_bt_mac_hi = (uint16_t)(value & 0xFFFF);
+        ESP_LOGI(TAG, "HMI_REG_BLUETOOTH_MAC_HI: 0x%04X", s_bt_mac_hi);
+        break;
+    }
+
+    case HMI_REG_BLUETOOTH_MAC_LO:
+    {
+        uint32_t lo = (uint32_t)value;
+        uint8_t mac[6] = {
+            (uint8_t)(lo & 0xFF), (uint8_t)((lo >> 8) & 0xFF),
+            (uint8_t)((lo >> 16) & 0xFF), (uint8_t)((lo >> 24) & 0xFF),
+            (uint8_t)(s_bt_mac_hi & 0xFF), (uint8_t)((s_bt_mac_hi >> 8) & 0xFF),
+        };
+        char buff[18];
+        snprintf(buff, sizeof(buff), "%02X:%02X:%02X:%02X:%02X:%02X",
+                 mac[5], mac[4], mac[3], mac[2], mac[1], mac[0]);
+        HMI_LV_SAFE_OBJ(objects.bt_panel_mac_label, lv_label_set_text(objects.bt_panel_mac_label, buff));
+        ESP_LOGI(TAG, "HMI_REG_BLUETOOTH_MAC_LO: %s", buff);
         break;
     }
 
@@ -5002,6 +6574,13 @@ void hmi_handle_reg(uint8_t reg, int32_t value)
         s_joy_j2x = joy2_x; s_joy_j2y = joy2_y;
         dev_joy_log_update();
 #endif
+        // JOY2 = joystick de servo (camara/cabeza-cuello). El centro NO es
+        // 0 — confirmado en pruebas que reposa en ~2132 y que "abajo"
+        // AUMENTA el valor de Y. Se combina con reversa en
+        // bigview_check_reverse_servo_combo() — deadzone ajustable en
+        // JOY_SERVO_DEADZONE.
+        s_servo_down_state = ((int32_t)joy2_y - JOY2_Y_CENTER) > JOY_SERVO_DEADZONE;
+        bigview_check_reverse_servo_combo();
         break;
     }
 
@@ -5041,12 +6620,54 @@ void hmi_handle_reg(uint8_t reg, int32_t value)
 
     case HMI_REG_MOTOR:
     {
-        ESP_LOGI(TAG, "HMI_REG_MOTOR: cmd=%d vel=%d",
-                 (int)((value >> 16) & 0xFFFF), (int)(value & 0xFFFF));
+        int32_t cmd = (value >> 16) & 0xFFFF;
+        ESP_LOGI(TAG, "HMI_REG_MOTOR: cmd=%d vel=%d", (int)cmd, (int)(value & 0xFFFF));
 #ifdef DEV_MODE
-        s_motor_cmd = (int16_t)((value >> 16) & 0xFFFF);
+        s_motor_cmd = (int16_t)cmd;
         s_motor_vel = (int16_t)(value & 0xFFFF);
 #endif
+        // Settings > Camera: el LED y el cuadro "RETROCEDIENDO"/"AVANZANDO"
+        // son fijos (no se ocultan ni cambian de tamano, para que nada se
+        // corra de lugar); solo el brillo del LED y el color del texto
+        // cambian con el estado.
+        bool reversing = (cmd == MOTOR_CMD_REVERSE);
+        bool advancing = (cmd == MOTOR_CMD_FORWARD);
+        HMI_LV_LOCKED(
+            if (objects.cam_reverse_led) {
+                lv_led_set_brightness(objects.cam_reverse_led, reversing ? 255 : 0);
+            }
+            if (objects.cam_reverse_label) {
+                lv_color_t txt = reversing ? lv_color_hex(0xffe74c3c) : lv_color_hex(0xffaaaaaa);
+                lv_obj_set_style_text_color(objects.cam_reverse_label, txt, LV_PART_MAIN | LV_STATE_DEFAULT);
+            }
+            if (objects.cam_forward_led) {
+                lv_led_set_brightness(objects.cam_forward_led, advancing ? 255 : 0);
+            }
+            if (objects.cam_forward_label) {
+                lv_color_t txt = advancing ? lv_color_hex(0xff27ae60) : lv_color_hex(0xffaaaaaa);
+                lv_obj_set_style_text_color(objects.cam_forward_label, txt, LV_PART_MAIN | LV_STATE_DEFAULT);
+            }
+        );
+        // RL2 (avance): sin interruptor, sigue el motor siempre, solo al
+        // cambiar de estado.
+        static bool s_rl2_sent = false;
+        if (advancing != s_rl2_sent) {
+            s_rl2_sent = advancing;
+            hmi_send_data(HMI_REG_RL2, advancing ? 1 : 0);
+        }
+
+        // RL1 (reversa): tiene el interruptor de 3 posiciones (Settings >
+        // Camera). Solo se auto-manda en modo AUTO; en ON/OFF el usuario
+        // manda el control (ver camera_rl1_*_cb()).
+        s_last_reversing_state = reversing;
+        if (s_rl1_mode == RL1_MODE_AUTO && reversing != s_rl1_sent) {
+            s_rl1_sent = reversing;
+            hmi_send_data(HMI_REG_RL1, reversing ? 1 : 0);
+        }
+
+        // Combo para abrir el panel de manejo: reversa + joystick de servo
+        // (JOY2) hacia abajo, AMBOS a la vez. Ver bigview_check_reverse_servo_combo().
+        bigview_check_reverse_servo_combo();
         break;
     }
 
@@ -5079,16 +6700,8 @@ void hmi_handle_reg(uint8_t reg, int32_t value)
 
     case HMI_REG_OTA_STATUS:
     {
-        static const char *ota_status_text[] = {
-            "Checking server...",       // 0
-            "No connection to server",  // 1
-            "Firmware up to date",      // 2
-            "Updating...",              // 3
-            "Update successful, restarting", // 4
-            "Update failed",            // 5
-        };
-        const char *text = (value >= 0 && value < (int32_t)(sizeof(ota_status_text) / sizeof(ota_status_text[0])))
-            ? ota_status_text[value] : "Unknown status";
+        s_console_ota_last_value = value;
+        const char *text = console_ota_status_text(value);
 
         HMI_LV_LOCKED(
             if (objects.console_ota_status_label) {
@@ -5108,14 +6721,11 @@ void hmi_handle_reg(uint8_t reg, int32_t value)
 
     case HMI_REG_FW_VERSION:
     {
+        s_cached_fw_version = value;
+        apply_fw_version(value);
         uint8_t major = (value >> 16) & 0xFF;
         uint8_t minor = (value >> 8)  & 0xFF;
         uint8_t patch = value & 0xFF;
-        char buff[40];
-        snprintf(buff, sizeof(buff), "Console firmware: v%u.%u.%u", major, minor, patch);
-
-        HMI_LV_SAFE_OBJ(objects.console_fw_version_label,
-            lv_label_set_text(objects.console_fw_version_label, buff));
         ESP_LOGI(TAG, "HMI_REG_FW_VERSION: v%u.%u.%u", major, minor, patch);
         break;
     }
@@ -5343,12 +6953,12 @@ void hmi_send_data(uint8_t reg, int32_t value)
 
 static inline uint8_t battery_percent(uint16_t mv)
 {
-    if (mv <= 12000)
+    if (mv <= 12790)
         return 0;
-    if (mv >= 16800)
+    if (mv >= 16720)
         return 100;
 
-    return (uint8_t)(((mv - 12000) * 100) / (16800 - 12000));
+    return (uint8_t)(((mv - 12790) * 100) / (16720 - 12790));
 }
 
 //*************************************************************************************

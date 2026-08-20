@@ -8,7 +8,7 @@ void action_robot_brightness_changed(lv_event_t *e) {
     // TODO: Implement action robot_brightness_changed here
     lv_obj_t * obj = lv_event_get_target(e);
     int32_t slider_value = lv_slider_get_value(obj);
-    int32_t value_pwm = (slider_value * 1023) / 100;
+    int32_t value_pwm = (slider_value * 1023 + 50) / 100; // redondeado, no truncado
 
     static uint32_t start_time;
 
@@ -16,6 +16,7 @@ void action_robot_brightness_changed(lv_event_t *e) {
     lv_snprintf(buff, sizeof(buff), "%d %%", slider_value);
     set_var_brightness(buff);
     lv_label_set_text_static(objects.brightness_label,get_var_brightness());
+    hmi_bigview_led_level_refresh();
 
     // a 200ms
     if (lv_tick_elaps(start_time) > 100){
@@ -29,18 +30,18 @@ void action_robot_brightness_released(lv_event_t *e) {
     // TODO: Implement action robot_brightness_released here
     lv_obj_t * obj = lv_event_get_target(e);
     int32_t slider_value = lv_slider_get_value(obj);
-    int32_t value_pwm = (slider_value * 1023) / 100;
+    int32_t value_pwm = (slider_value * 1023 + 50) / 100; // redondeado, no truncado
 
     // Envio de datos a la consola
     hmi_send_data(HMI_REG_ROBOT_LED_CHANGED, value_pwm);
 }
 
 void action_encoder_button_reset_clicked(lv_event_t *e) {
-    // Button encoder
-    hmi_encoder_set_raw(0);
-
-    // Envio de datos a la consola
-    hmi_send_data(HMI_REG_ENCODER, 0);
+    // Button encoder — hmi_encoder_reset() ya se encarga de resetear el
+    // valor mostrado (con offset, para que no salte al volver el proximo
+    // dato real) y de avisarle a la consola.
+    (void)e;
+    hmi_encoder_reset();
 }
 
 void action_angle_neck_btn_decreased(lv_event_t *e) {
@@ -422,6 +423,12 @@ void __attribute__((weak)) hmi_update_panel_retheme(void) {}
  * del motor de reproduccion, que solo main.c conoce). */
 void __attribute__((weak)) hmi_modes_giro_retheme(void) {}
 
+/* Weak: reaplicado en main.c para recolorear las filas de la lista de puntos
+ * guardados (creadas/destruidas en runtime por auto_rotation_editor_refresh_list,
+ * no en screens.c) y el borde del boton Test cuando esta en reposo (su color
+ * rojo "corriendo" es semantico y no se toca). */
+void __attribute__((weak)) hmi_autorot_editor_retheme(void) {}
+
 /* Themes the "Update" (WiFi/OTA) panel de System Info — creado dinamicamente
  * en main.c. No se reusa theme_info_panel() generico: su heuristica por
  * cantidad de hijos (2 hijos = fila key/val) no encaja con la fila
@@ -457,6 +464,18 @@ static void theme_topbar_title(lv_obj_t *title) {
     lv_obj_set_style_border_color(title, g_theme.txt_accent, LV_PART_MAIN | LV_STATE_DEFAULT);
 }
 
+/* Themes el boton "Volver"/ATRAS de auto_rotation_make_topbar() (screens.c).
+ * Es transparente (bg_opa=0): el texto y el borde tenian blanco/gris fijo
+ * asumiendo que siempre se ve sobre fondo oscuro (Dark/Classic) — en tema
+ * Light el fondo detras es claro y el texto blanco quedaba practicamente
+ * invisible. Ahora sigue al tema como el resto de los botones outline. */
+static void theme_topbar_back_btn(lv_obj_t *btn) {
+    if (!btn) return;
+    lv_obj_set_style_border_color(btn, g_theme.bd_card, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_t *lbl = lv_obj_get_child(btn, 0);
+    if (lbl) lv_obj_set_style_text_color(lbl, g_theme.txt_primary, LV_PART_MAIN | LV_STATE_DEFAULT);
+}
+
 /* Themes "Control por Puntos" — pantalla completa dentro de MODES, creada
  * dinamicamente en screens.c (create_panel_modes_auto_rotation). Los +/- de
  * cabeza/cuello que contiene son los ORIGINALES de MODES (obj19/obj21,
@@ -465,6 +484,7 @@ static void theme_topbar_title(lv_obj_t *title) {
 static void theme_control_puntos_panel(lv_obj_t *panel) {
     if (!panel) return;
     theme_topbar_title(objects.cp_title_label);
+    theme_topbar_back_btn(objects.cp_btn_volver);
     // cp_btn_guardar_centrado queda amarillo/negro fijo (accion primaria),
     // no se tematiza — mismo criterio que ar_btn_guardar_punto/ar_btn_probar.
 }
@@ -473,19 +493,61 @@ static void theme_control_puntos_panel(lv_obj_t *panel) {
 static void theme_autorot_picker_panel(lv_obj_t *panel) {
     if (!panel) return;
     theme_topbar_title(objects.autorot_picker_title_label);
+    theme_topbar_back_btn(objects.autorot_picker_btn_volver);
     if (objects.autorot_picker_subtitle_label) lv_obj_set_style_text_color(objects.autorot_picker_subtitle_label, g_theme.txt_secondary, LV_PART_MAIN | LV_STATE_DEFAULT);
     apply_btn_style(objects.autorot_btn_recorrido1, false);
     apply_btn_style(objects.autorot_btn_recorrido2, false);
 }
 
-/* Themes el editor de puntos de "Config Auto Rotation". Tarjetas de servo,
- * botones +/- amarillos, velocidad y los numeros grandes quedan con su
- * estetica fija (oscura + amarillo) del mockup del usuario en cualquier
- * tema — solo el titulo de la barra superior sigue al tema activo, mismo
- * criterio que ar_btn_guardar_punto/ar_btn_probar. */
+/* Themes el editor de puntos de "Config Auto Rotation" — velocidad, lista de
+ * puntos guardados y tarjetas Head/Neck siguen el tema activo igual que el
+ * resto de la app. ar_btn_eliminar_punto queda rojo fijo (color semantico de
+ * "borrar/peligro", no decorativo). Las filas de la lista y el borde del
+ * boton Test se recolorean desde main.c via hmi_autorot_editor_retheme()
+ * (son elementos que se crean/actualizan en runtime, no en screens.c). */
+static void theme_card(lv_obj_t *obj) {
+    if (!obj) return;
+    lv_obj_set_style_bg_color(obj,     g_theme.bg_card, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_color(obj, g_theme.bd_card, LV_PART_MAIN | LV_STATE_DEFAULT);
+}
+static void theme_txt(lv_obj_t *obj, lv_color_t clr) {
+    if (!obj) return;
+    lv_obj_set_style_text_color(obj, clr, LV_PART_MAIN | LV_STATE_DEFAULT);
+}
+
 static void theme_autorot_editor_panel(lv_obj_t *panel) {
     if (!panel) return;
     theme_topbar_title(objects.ar_title_label);
+    theme_topbar_back_btn(objects.ar_btn_volver);
+
+    theme_txt(objects.ar_points_caption_label, g_theme.txt_secondary);
+    theme_card(objects.ar_points_list);
+
+    theme_card(objects.ar_speed_card);
+    theme_txt(objects.ar_speed_caption_label, g_theme.txt_secondary);
+    theme_txt(objects.ar_speed_label, g_theme.txt_accent);
+    apply_btn_style(objects.ar_speed_btn_decrease, true);
+    apply_btn_style(objects.ar_speed_btn_increase, true);
+
+    theme_card(objects.ar_head_card);
+    theme_txt(objects.ar_head_caption_label, g_theme.txt_secondary);
+    theme_txt(objects.ar_angle_head_label, g_theme.txt_primary);
+    apply_btn_style(objects.ar_angle_head_btn_decrese,   true);
+    apply_btn_style(objects.ar_angle_head_btn_increased, true);
+
+    theme_card(objects.ar_neck_card);
+    theme_txt(objects.ar_neck_caption_label, g_theme.txt_secondary);
+    theme_txt(objects.ar_angle_neck_label, g_theme.txt_primary);
+    apply_btn_style(objects.ar_angle_neck_btn_decrese,   true);
+    apply_btn_style(objects.ar_angle_neck_btn_increased, true);
+
+    if (objects.ar_btn_probar) {
+        lv_obj_t *lbl = lv_obj_get_child(objects.ar_btn_probar, 0);
+        theme_txt(lbl, g_theme.txt_primary);
+    }
+    apply_btn_style(objects.ar_btn_guardar_punto, true);
+
+    hmi_autorot_editor_retheme();
 }
 
 /* Themes Settings > Limites de Servo. */
@@ -576,7 +638,7 @@ void action_sysinfo_btn_update(lv_event_t *e) {
 /* ---- Settings navigation ---- */
 
 static void settings_set_nav_active(lv_obj_t *active_btn) {
-    lv_obj_t *btns[8] = {
+    lv_obj_t *btns[10] = {
         objects.settings_btn_brightness,
         objects.settings_btn_theme,
         objects.settings_btn_battery,
@@ -584,14 +646,16 @@ static void settings_set_nav_active(lv_obj_t *active_btn) {
         objects.settings_btn_user,
         objects.settings_btn_encoder,
         objects.settings_btn_tecnologia,
-        objects.settings_btn_srv_limits
+        objects.settings_btn_camera,
+        objects.settings_btn_srv_limits,
+        objects.settings_btn_bluetooth
     };
-    for (int i = 0; i < 8; i++)
+    for (int i = 0; i < 10; i++)
         apply_btn_style(btns[i], btns[i] == active_btn);
 }
 
 static void settings_show_panel(lv_obj_t *panel) {
-    lv_obj_t *panels[8] = {
+    lv_obj_t *panels[10] = {
         objects.settings_content_brightness,
         objects.settings_content_theme,
         objects.settings_content_battery,
@@ -599,9 +663,11 @@ static void settings_show_panel(lv_obj_t *panel) {
         objects.settings_content_user,
         objects.settings_content_encoder,
         objects.settings_content_tecnologia,
-        objects.settings_content_srv_limits
+        objects.settings_content_camera,
+        objects.settings_content_srv_limits,
+        objects.settings_content_bluetooth
     };
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < 10; i++) {
         if (!panels[i]) continue;
         if (panels[i] == panel)
             lv_obj_remove_flag(panels[i], LV_OBJ_FLAG_HIDDEN);
@@ -656,6 +722,35 @@ void action_settings_btn_tecnologia(lv_event_t *e) {
     g_settings_active_nav = objects.settings_btn_tecnologia;
     settings_set_nav_active(objects.settings_btn_tecnologia);
     settings_show_panel(objects.settings_content_tecnologia);
+}
+
+void action_settings_btn_camera(lv_event_t *e) {
+    g_settings_active_nav = objects.settings_btn_camera;
+    settings_set_nav_active(objects.settings_btn_camera);
+    settings_show_panel(objects.settings_content_camera);
+}
+
+void action_settings_btn_bluetooth(lv_event_t *e) {
+    g_settings_active_nav = objects.settings_btn_bluetooth;
+    settings_set_nav_active(objects.settings_btn_bluetooth);
+    settings_show_panel(objects.settings_content_bluetooth);
+}
+
+void action_settings_bluetooth_disconnect(lv_event_t *e) {
+    hmi_send_data(HMI_REG_BLUETOOTH_DISCONNECT, 1);
+}
+
+void action_settings_bluetooth_block(lv_event_t *e) {
+    hmi_send_data(HMI_REG_BLUETOOTH_BLOCK, 1);
+}
+
+void action_settings_bluetooth_unblock_all(lv_event_t *e) {
+    hmi_send_data(HMI_REG_BLUETOOTH_UNBLOCK_ALL, 1);
+}
+
+void action_settings_wifi_edit(lv_event_t *e) {
+    (void)e;
+    hmi_open_wifi_editor();
 }
 
 void action_settings_btn_srv_limits(lv_event_t *e) {
@@ -835,10 +930,13 @@ static void apply_theme(int t) {
     lv_obj_set_style_border_color(objects.obj2, th->bd_card,       LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_bg_color(objects.obj4,     th->bg_indicator,  LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_border_color(objects.obj4, th->bd_card,       LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_color(objects.robot_model_pill,     th->bg_indicator, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_color(objects.robot_model_pill, th->bd_card,      LV_PART_MAIN | LV_STATE_DEFAULT);
 
     /* obj1 = logotipo Welltepp (imagen), ya no es texto — no necesita retheme */
     TXT(obj3,  th->txt_primary);  /* "Online"    */
     TXT(obj5,  th->txt_primary);  /* "Bluetooth" */
+    TXT(robot_model_label, th->txt_primary);  /* "RD90" (o el modelo que llegue) */
     TXT(console_voltage_percent_label, th->txt_primary);
 
     /* Console battery bar in top bar — gold in Classic (original), accent in other themes */
@@ -881,10 +979,10 @@ static void apply_theme(int t) {
                                th->clr_bar_bg, LV_PART_MAIN      | LV_STATE_DEFAULT);
     lv_obj_set_style_bg_color(objects.robot_voltage_percent_bar,
                                th->clr_bar,    LV_PART_INDICATOR  | LV_STATE_DEFAULT);
-    TXT(obj8,           th->txt_primary);
-    TXT(robot_voltage,  th->txt_primary);
-    TXT(obj9,           th->txt_primary);
-    TXT(console_voltage,th->txt_primary);
+    TXT(robot_voltage_caption,   th->txt_primary);
+    TXT(robot_voltage,           th->txt_primary);
+    TXT(console_voltage_caption, th->txt_primary);
+    TXT(console_voltage,         th->txt_primary);
 
     /* Tilt card */
     SET_CARD(obj10);
@@ -1018,6 +1116,18 @@ static void apply_theme(int t) {
     theme_panel_title(objects.settings_content_battery);  /* "BATTERY DISPLAY" title */
     apply_btn_style(objects.settings_btn_bat_voltage, !g_bat_display_percent);
     apply_btn_style(objects.settings_btn_bat_percent,  g_bat_display_percent);
+    // Caption de GENERAL CONTROLS ("Robot Voltage"/"Robot Percent", etc.):
+    // se re-sincroniza aca (arranque + cambio de tema) porque en el arranque
+    // g_bat_display_percent recien se carga de NVS despues de lang_apply(),
+    // asi que no alcanza con que lang_apply() lo ponga solo una vez.
+    if (objects.robot_voltage_caption) {
+        lv_label_set_text(objects.robot_voltage_caption,
+            g_bat_display_percent ? g_lang->lbl_robot_percent : g_lang->lbl_robot_voltage);
+    }
+    if (objects.console_voltage_caption) {
+        lv_label_set_text(objects.console_voltage_caption,
+            g_bat_display_percent ? g_lang->lbl_console_percent : g_lang->lbl_console_voltage);
+    }
 
     /* Language panel */
     theme_panel_title(objects.settings_content_language);  /* "LANGUAGE" title */
@@ -1101,6 +1211,10 @@ void action_settings_bat_voltage(lv_event_t *e) {
         lv_label_set_text(objects.robot_voltage, get_var_robot_voltage());
     if (objects.console_voltage)
         lv_label_set_text(objects.console_voltage, get_var_console_voltage());
+    if (objects.robot_voltage_caption)
+        lv_label_set_text(objects.robot_voltage_caption, g_lang->lbl_robot_voltage);
+    if (objects.console_voltage_caption)
+        lv_label_set_text(objects.console_voltage_caption, g_lang->lbl_console_voltage);
     hmi_ui_prefs_save_bat_display(0);
 }
 
@@ -1112,6 +1226,10 @@ void action_settings_bat_percent(lv_event_t *e) {
         lv_label_set_text(objects.robot_voltage, get_var_robot_voltage_percent());
     if (objects.console_voltage)
         lv_label_set_text(objects.console_voltage, get_var_console_voltage_percent());
+    if (objects.robot_voltage_caption)
+        lv_label_set_text(objects.robot_voltage_caption, g_lang->lbl_robot_percent);
+    if (objects.console_voltage_caption)
+        lv_label_set_text(objects.console_voltage_caption, g_lang->lbl_console_percent);
     hmi_ui_prefs_save_bat_display(1);
 }
 
@@ -1140,6 +1258,8 @@ lv_color_t hmi_theme_bd_btn_active(void)    { return g_theme.bd_btn_active; }
 lv_color_t hmi_theme_txt_btn_active(void)   { return g_theme.txt_btn_active; }
 lv_color_t hmi_theme_bd_card(void)          { return g_theme.bd_card; }
 lv_color_t hmi_theme_bg_topbar(void)        { return g_theme.bg_topbar; }
+lv_color_t hmi_theme_bg_card(void)          { return g_theme.bg_card; }
+lv_color_t hmi_theme_bg_indicator(void)     { return g_theme.bg_indicator; }
 
 /* Weak stub: main.c overrides this when DEV_MODE is defined */
 void __attribute__((weak)) hmi_dev_retheme(void) {}

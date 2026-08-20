@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Conversor de fuentes a LVGL (local)</title>
+<script src="https://cdn.jsdelivr.net/npm/opentype.js@1.3.4/dist/opentype.min.js"></script>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: system-ui, sans-serif; background:#12141a; color:#e6e6e6; margin:0; padding:24px; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  .sub { color:#9aa0aa; font-size:13px; margin-bottom:20px; }
+  .warn { background:#3a2a12; border:1px solid #8a5a12; color:#f0c98a; padding:10px 14px; border-radius:6px; font-size:13px; margin-bottom:20px; }
+  fieldset { border:1px solid #2c313c; border-radius:8px; padding:14px 16px; margin-bottom:18px; }
+  legend { padding:0 6px; color:#9aa0aa; font-size:13px; }
+  label { display:block; font-size:12px; color:#9aa0aa; margin:10px 0 4px; }
+  input[type=text], input[type=number], select {
+    background:#1b1e26; border:1px solid #333846; color:#e6e6e6; border-radius:5px;
+    padding:6px 8px; font-size:13px; width:100%; box-sizing:border-box;
+  }
+  input[type=file] { font-size:13px; }
+  .row { display:flex; gap:14px; flex-wrap:wrap; }
+  .row > div { flex:1; min-width:140px; }
+  button {
+    background:#e6b800; color:#1a1a1a; border:none; border-radius:6px; font-weight:600;
+    padding:9px 18px; font-size:13px; cursor:pointer; margin-top:14px;
+  }
+  button.secondary { background:#2c313c; color:#e6e6e6; font-weight:500; padding:6px 12px; margin-top:0; }
+  button:disabled { opacity:.5; cursor:default; }
+  #status { font-size:13px; color:#9aa0aa; margin-top:10px; white-space:pre-wrap; }
+  .card { border:1px solid #2c313c; border-radius:8px; padding:16px; margin-bottom:20px; }
+  .card h2 { font-size:15px; margin:0 0 4px; }
+  .card .meta { font-size:12px; color:#9aa0aa; margin-bottom:12px; }
+  .actions { display:flex; gap:8px; margin-bottom:12px; }
+  canvas.preview { background:#000; border:1px solid #333846; border-radius:4px; image-rendering:pixelated; display:block; margin-bottom:8px; }
+  canvas.sheet { background:#000; border:1px solid #333846; border-radius:4px; image-rendering:pixelated; display:block; }
+  textarea.code {
+    width:100%; height:220px; background:#0c0d10; color:#c9d1d9; border:1px solid #2c313c;
+    border-radius:6px; font-family:Consolas,monospace; font-size:12px; padding:10px; box-sizing:border-box;
+    resize:vertical;
+  }
+  details summary { cursor:pointer; font-size:13px; color:#9aa0aa; margin-top:8px; }
+</style>
+</head>
+<body>
+
+<h1>Conversor TTF/OTF &rarr; fuente LVGL (.c)</h1>
+<div class="sub">Herramienta local, corre 100% en tu navegador (usa <a href="https://opentype.js.org/" style="color:#e6b800" target="_blank">opentype.js</a> desde un CDN para leer la fuente; ningun archivo se sube a ningun servidor).</div>
+
+<div class="warn">
+  Esto <b>no</b> es el conversor oficial de LVGL (<code>lv_font_conv</code>) &mdash; es una reimplementacion propia,
+  verificada a mano contra el formato binario real de <code>lv_font_montserrat_14.c</code> de este proyecto.
+  Antes de flashear el equipo: revisa la vista previa de abajo (usa un decodificador que lee los mismos bytes
+  empaquetados que van al .c, no la imagen original de la fuente) y probá primero en UNA sola pantalla/label
+  chica antes de reemplazar la fuente en toda la UI.
+</div>
+
+<fieldset>
+  <legend>1. Archivo y opciones</legend>
+  <label>Archivo de fuente (.ttf / .otf / .woff)</label>
+  <input type="file" id="fontFile" accept=".ttf,.otf,.woff">
+
+  <div class="row">
+    <div>
+      <label>Nombre base (sin tamaño) &mdash; ej: lv_font_roboto_mono</label>
+      <input type="text" id="varName" value="lv_font_custom">
+    </div>
+    <div>
+      <label>Tamaños en px (separados por coma)</label>
+      <input type="text" id="sizes" value="16">
+    </div>
+  </div>
+
+  <div class="row">
+    <div>
+      <label>Bits por pixel (bpp)</label>
+      <select id="bpp">
+        <option value="1">1</option>
+        <option value="2">2</option>
+        <option value="4" selected>4 (usado por las fuentes actuales del proyecto)</option>
+        <option value="8">8</option>
+      </select>
+    </div>
+    <div>
+      <label>Rango Unicode inicio (hex)</label>
+      <input type="text" id="rangeStart" value="20">
+    </div>
+    <div>
+      <label>Rango Unicode fin (hex)</label>
+      <input type="text" id="rangeEnd" value="FF">
+    </div>
+  </div>
+  <div class="sub" style="margin-top:8px">
+    0x20-0xFF cubre ASCII + Latin-1 (incluye el símbolo de grado ° = 0xB0, usado en las pantallas de Recorrido).
+  </div>
+
+  <button id="convertBtn" disabled>Convertir</button>
+  <div id="status"></div>
+</fieldset>
+
+<div id="results"></div>
+
+<script>
+const LV_FONT_SUBPX_NONE = 0;
+
+let parsedFont = null;
+
+document.getElementById('fontFile').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  const statusEl = document.getElementById('status');
+  const convertBtn = document.getElementById('convertBtn');
+  convertBtn.disabled = true;
+  parsedFont = null;
+  if (!file) return;
+  statusEl.textContent = 'Leyendo fuente...';
+  try {
+    const buf = await file.arrayBuffer();
+    parsedFont = opentype.parse(buf);
+    statusEl.textContent = `Fuente cargada: ${parsedFont.names?.fontFamily?.en || file.name} — ${parsedFont.glyphs.length} glifos, unitsPerEm=${parsedFont.unitsPerEm}`;
+    if (!document.getElementById('varName').value || document.getElementById('varName').value === 'lv_font_custom') {
+      const base = 'lv_font_' + sanitizeIdent(file.name.replace(/\.[^.]+$/, '')).toLowerCase();
+      document.getElementById('varName').value = base;
+    }
+    convertBtn.disabled = false;
+  } catch (err) {
+    statusEl.textContent = 'Error leyendo la fuente: ' + err.message + ' (¿el navegador bloqueó opentype.js del CDN? probá con internet activo)';
+  }
+});
+
+function sanitizeIdent(s) {
+  s = s.replace(/[^A-Za-z0-9_]/g, '_');
+  if (/^[0-9]/.test(s)) s = '_' + s;
+  return s || 'font';
+}
+
+// Empaqueta valores (0..(2^bpp-1)) en un bitstream MSB-first, continuo,
+// sin padding entre filas — asi es como LVGL espera el formato "plain"
+// (bitmap_format=0, stride=0), confirmado leyendo lv_font_montserrat_14.c.
+function packBits(values, bpp) {
+  const bytes = [];
+  let buf = 0, cnt = 0;
+  for (const v of values) {
+    buf = (buf << bpp) | (v & ((1 << bpp) - 1));
+    cnt += bpp;
+    while (cnt >= 8) {
+      cnt -= 8;
+      bytes.push((buf >> cnt) & 0xFF);
+    }
+  }
+  if (cnt > 0) bytes.push((buf << (8 - cnt)) & 0xFF);
+  return bytes;
+}
+
+// Inverso exacto de packBits — se usa SOLO para la vista previa, para
+// verificar que lo que va a terminar leyendo el firmware (bytes empaquetados)
+// realmente decodifica a los pixeles esperados, no la imagen "bonita" original.
+function unpackBits(bytes, count, bpp) {
+  const out = new Array(count);
+  let byteIdx = 0, bitPos = 0;
+  const maxVal = (1 << bpp) - 1;
+  for (let i = 0; i < count; i++) {
+    let v = 0, need = bpp;
+    while (need > 0) {
+      if (byteIdx >= bytes.length) { v <<= need; need = 0; break; }
+      const avail = 8 - bitPos;
+      const take = Math.min(avail, need);
+      const shift = avail - take;
+      const mask = (1 << take) - 1;
+      const bits = (bytes[byteIdx] >> shift) & mask;
+      v = (v << take) | bits;
+      need -= take;
+      bitPos += take;
+      if (bitPos >= 8) { bitPos = 0; byteIdx++; }
+    }
+    out[i] = v & maxVal;
+  }
+  return out;
+}
+
+// Rasteriza un glifo a nivel de cobertura (alpha) usando el mismo canvas
+// y convencion de coordenadas que opentype.js usa para dibujar directo en
+// <canvas> (y-down, baseline en y=0). ofs_y de LVGL se deriva empiricamente
+// contra lv_font_montserrat_14.c: ofs_y = -round(bbox.y2) (positivo = arriba
+// de la linea base), verificado con "," (desciende, ofs_y=-3) y "-" (ofs_y=3).
+function rasterizeGlyph(font, cp, size, bpp) {
+  const ch = String.fromCodePoint(cp);
+  const glyph = font.charToGlyph(ch);
+  const scale = size / font.unitsPerEm;
+  const advW = Math.round((glyph.advanceWidth || 0) * scale * 16);
+
+  const path = glyph.getPath(0, 0, size);
+  if (!path.commands || path.commands.length === 0) {
+    return { box_w: 0, box_h: 0, ofs_x: 0, ofs_y: 0, adv_w: advW, levels: [] };
+  }
+  const bb = path.getBoundingBox();
+  const x1 = Math.round(bb.x1), x2 = Math.round(bb.x2);
+  const y1 = Math.round(bb.y1), y2 = Math.round(bb.y2);
+  const box_w = Math.max(0, x2 - x1);
+  const box_h = Math.max(0, y2 - y1);
+  const ofs_x = x1;
+  const ofs_y = -y2;
+
+  if (box_w === 0 || box_h === 0) {
+    return { box_w: 0, box_h: 0, ofs_x: 0, ofs_y: 0, adv_w: advW, levels: [] };
+  }
+
+  const SS = 4;
+  const cv = document.createElement('canvas');
+  cv.width = box_w * SS;
+  cv.height = box_h * SS;
+  const cx = cv.getContext('2d');
+  cx.setTransform(SS, 0, 0, SS, -x1 * SS, -y1 * SS);
+  path.fill = 'black';
+  path.draw(cx);
+
+  const img = cx.getImageData(0, 0, cv.width, cv.height).data;
+  const maxVal = (1 << bpp) - 1;
+  const levels = new Array(box_w * box_h);
+  for (let py = 0; py < box_h; py++) {
+    for (let px = 0; px < box_w; px++) {
+      let sum = 0;
+      for (let sy = 0; sy < SS; sy++) {
+        for (let sx = 0; sx < SS; sx++) {
+          const cxp = px * SS + sx, cyp = py * SS + sy;
+          const idx = (cyp * cv.width + cxp) * 4 + 3; // canal alpha
+          sum += img[idx];
+        }
+      }
+      const coverage = sum / (SS * SS) / 255;
+      levels[py * box_w + px] = Math.round(coverage * maxVal);
+    }
+  }
+  return { box_w, box_h, ofs_x, ofs_y, adv_w: advW, levels };
+}
+
+function generateFontData(font, opts) {
+  const { size, bpp, rangeStart, rangeEnd } = opts;
+  const glyphs = [{ bitmap_index: 0, adv_w: 0, box_w: 0, box_h: 0, ofs_x: 0, ofs_y: 0, bytes: [], cp: null }];
+  let bitmapOffset = 0;
+  const allBytes = [];
+
+  for (let cp = rangeStart; cp <= rangeEnd; cp++) {
+    const g = rasterizeGlyph(font, cp, size, bpp);
+    const bytes = g.levels.length ? packBits(g.levels, bpp) : [];
+    glyphs.push({
+      bitmap_index: bitmapOffset, adv_w: g.adv_w, box_w: g.box_w, box_h: g.box_h,
+      ofs_x: g.ofs_x, ofs_y: g.ofs_y, bytes, cp, levels: g.levels
+    });
+    bitmapOffset += bytes.length;
+    for (const b of bytes) allBytes.push(b);
+  }
+
+  const scale = size / font.unitsPerEm;
+  const ascender = (font.ascender || font.unitsPerEm * 0.8) * scale;
+  const descender = (font.descender || -font.unitsPerEm * 0.2) * scale;
+  const line_height = Math.round(ascender - descender);
+  const base_line = Math.round(-descender);
+
+  let underline_position = -1, underline_thickness = 1;
+  try {
+    if (font.tables.post && typeof font.tables.post.underlinePosition === 'number') {
+      underline_position = Math.round(font.tables.post.underlinePosition * scale);
+      underline_thickness = Math.max(1, Math.round(font.tables.post.underlineThickness * scale));
+    }
+  } catch (e) { /* mantiene los valores por defecto */ }
+
+  return { glyphs, allBytes, rangeStart, rangeEnd, bpp, size, line_height, base_line, underline_position, underline_thickness };
+}
+
+function toBitmapCArray(allBytes, glyphs) {
+  let out = '';
+  let cursor = 0;
+  for (const g of glyphs) {
+    if (g.cp === null) continue; // salta el glifo reservado id=0
+    if (g.bytes.length === 0) continue;
+    const label = g.cp < 0x20 || g.cp > 0x7E ? `U+${g.cp.toString(16).toUpperCase().padStart(4,'0')}` :
+      `U+${g.cp.toString(16).toUpperCase().padStart(4,'0')} "${String.fromCodePoint(g.cp).replace(/\\/g,'\\\\').replace(/"/g,'\\"')}"`;
+    out += `\n    /* ${label} */\n    `;
+    const parts = g.bytes.map(b => '0x' + b.toString(16));
+    for (let i = 0; i < parts.length; i++) {
+      out += parts[i] + (i < parts.length - 1 ? ', ' : ',');
+      if ((i + 1) % 12 === 0 && i < parts.length - 1) out += '\n    ';
+    }
+    out += '\n';
+  }
+  return out;
+}
+
+function buildCFile(data, varName) {
+  const { glyphs, rangeStart, rangeEnd, bpp, size, line_height, base_line, underline_position, underline_thickness } = data;
+
+  const glyphDscLines = glyphs.map((g, i) => {
+    if (i === 0) return `    {.bitmap_index = 0, .adv_w = 0, .box_w = 0, .box_h = 0, .ofs_x = 0, .ofs_y = 0} /* id = 0 reservado */`;
+    return `    {.bitmap_index = ${g.bitmap_index}, .adv_w = ${g.adv_w}, .box_w = ${g.box_w}, .box_h = ${g.box_h}, .ofs_x = ${g.ofs_x}, .ofs_y = ${g.ofs_y}}`;
+  }).join(',\n');
+
+  const rangeLength = rangeEnd - rangeStart + 1;
+
+  return `/*******************************************************************************
+ * Size: ${size} px
+ * Bpp: ${bpp}
+ * Rango: 0x${rangeStart.toString(16).toUpperCase()}-0x${rangeEnd.toString(16).toUpperCase()}
+ * Generado con tools/font_converter.html (conversor local, no es el lv_font_conv oficial)
+ ******************************************************************************/
+
+#ifdef LV_LVGL_H_INCLUDE_SIMPLE
+    #include "lvgl.h"
+#else
+    #include "../../lvgl.h"
+#endif
+
+/*-----------------
+ *    BITMAPS
+ *----------------*/
+static LV_ATTRIBUTE_LARGE_CONST const uint8_t ${varName}_glyph_bitmap[] = {${toBitmapCArray(data.allBytes, glyphs)}};
+
+/*---------------------
+ *  GLYPH DESCRIPTION
+ *--------------------*/
+static const lv_font_fmt_txt_glyph_dsc_t ${varName}_glyph_dsc[] = {
+${glyphDscLines}
+};
+
+/*---------------------
+ *  CHARACTER MAPPING
+ *--------------------*/
+static const lv_font_fmt_txt_cmap_t ${varName}_cmaps[] = {
+    {
+        .range_start = ${rangeStart}, .range_length = ${rangeLength}, .glyph_id_start = 1,
+        .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
+    }
+};
+
+/*--------------------
+ *  DATOS DE LA FUENTE
+ *--------------------*/
+static const lv_font_fmt_txt_dsc_t ${varName}_dsc = {
+    .glyph_bitmap = ${varName}_glyph_bitmap,
+    .glyph_dsc = ${varName}_glyph_dsc,
+    .cmaps = ${varName}_cmaps,
+    .kern_dsc = NULL,
+    .kern_scale = 0,
+    .cmap_num = 1,
+    .bpp = ${bpp},
+    .kern_classes = 0,
+    .bitmap_format = 0,
+};
+
+/*-----------------
+ *  FUENTE PUBLICA
+ *----------------*/
+const lv_font_t ${varName} = {
+    .get_glyph_dsc = lv_font_get_glyph_dsc_fmt_txt,
+    .get_glyph_bitmap = lv_font_get_bitmap_fmt_txt,
+    .line_height = ${line_height},
+    .base_line = ${base_line},
+    .subpx = LV_FONT_SUBPX_NONE,
+    .underline_position = ${underline_position},
+    .underline_thickness = ${underline_thickness},
+    .dsc = &${varName}_dsc
+};
+`;
+}
+
+function renderGlyphSheet(canvas, data) {
+  const cols = 16;
+  const cellW = data.size + 6, cellH = data.size + 10;
+  const rows = Math.ceil((data.glyphs.length - 1) / cols);
+  canvas.width = cols * cellW;
+  canvas.height = rows * cellH;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const maxVal = (1 << data.bpp) - 1;
+
+  let gi = 0;
+  for (let i = 1; i < data.glyphs.length; i++) {
+    const g = data.glyphs[i];
+    const col = gi % cols, row = Math.floor(gi / cols);
+    gi++;
+    const originX = col * cellW + 3;
+    const baselineY = row * cellH + data.base_line + 4;
+    if (g.box_w === 0 || g.box_h === 0) continue;
+    const decoded = unpackBits(g.bytes, g.box_w * g.box_h, data.bpp);
+    const imgData = ctx.createImageData(g.box_w, g.box_h);
+    for (let p = 0; p < decoded.length; p++) {
+      const v = Math.round((decoded[p] / maxVal) * 255);
+      imgData.data[p*4] = v; imgData.data[p*4+1] = v; imgData.data[p*4+2] = v; imgData.data[p*4+3] = 255;
+    }
+    ctx.putImageData(imgData, originX + g.ofs_x, baselineY - g.ofs_y - g.box_h);
+  }
+}
+
+function renderTextPreview(canvas, data, text) {
+  const ctx = canvas.getContext('2d');
+  canvas.width = 760;
+  canvas.height = Math.max(60, data.line_height * 2 + 20);
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const baselineY = data.base_line + 10;
+  ctx.strokeStyle = '#333'; ctx.beginPath();
+  ctx.moveTo(0, baselineY + 0.5); ctx.lineTo(canvas.width, baselineY + 0.5); ctx.stroke();
+
+  const maxVal = (1 << data.bpp) - 1;
+  let cursorX = 6;
+  for (const ch of text) {
+    const cp = ch.codePointAt(0);
+    if (cp < data.rangeStart || cp > data.rangeEnd) { cursorX += data.size * 0.5; continue; }
+    const g = data.glyphs[cp - data.rangeStart + 1];
+    if (g.box_w > 0 && g.box_h > 0) {
+      const decoded = unpackBits(g.bytes, g.box_w * g.box_h, data.bpp);
+      const imgData = ctx.createImageData(g.box_w, g.box_h);
+      for (let p = 0; p < decoded.length; p++) {
+        const v = Math.round((decoded[p] / maxVal) * 255);
+        imgData.data[p*4] = v; imgData.data[p*4+1] = v; imgData.data[p*4+2] = v; imgData.data[p*4+3] = 255;
+      }
+      ctx.putImageData(imgData, Math.round(cursorX) + g.ofs_x, baselineY - g.ofs_y - g.box_h);
+    }
+    cursorX += g.adv_w / 16;
+  }
+}
+
+document.getElementById('convertBtn').addEventListener('click', () => {
+  if (!parsedFont) return;
+  const statusEl = document.getElementById('status');
+  const resultsEl = document.getElementById('results');
+  resultsEl.innerHTML = '';
+
+  const varBase = sanitizeIdent(document.getElementById('varName').value || 'lv_font_custom');
+  const bpp = parseInt(document.getElementById('bpp').value, 10);
+  const rangeStart = parseInt(document.getElementById('rangeStart').value.replace(/^0x/i, ''), 16);
+  const rangeEnd = parseInt(document.getElementById('rangeEnd').value.replace(/^0x/i, ''), 16);
+  const sizes = document.getElementById('sizes').value.split(',')
+    .map(s => parseInt(s.trim(), 10)).filter(n => n > 0 && n <= 128);
+
+  if (!Number.isFinite(rangeStart) || !Number.isFinite(rangeEnd) || rangeEnd < rangeStart) {
+    statusEl.textContent = 'Rango unicode invalido.'; return;
+  }
+  if (rangeEnd - rangeStart > 2000) {
+    statusEl.textContent = 'Rango demasiado grande (max 2000 caracteres por tamaño).'; return;
+  }
+  if (sizes.length === 0) { statusEl.textContent = 'Ingresa al menos un tamaño valido.'; return; }
+
+  statusEl.textContent = `Generando ${sizes.length} tamaño(s)...`;
+
+  setTimeout(() => {
+    for (const size of sizes) {
+      const varName = `${varBase}_${size}`;
+      const data = generateFontData(parsedFont, { size, bpp, rangeStart, rangeEnd });
+      const cCode = buildCFile(data, varName);
+
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.innerHTML = `
+        <h2>${varName}</h2>
+        <div class="meta">${size}px · bpp=${bpp} · ${data.glyphs.length - 1} glifos · ${data.allBytes.length} bytes de bitmap</div>
+        <label style="margin-top:0">Vista previa (decodificada desde los bytes empaquetados, no desde la fuente original)</label>
+        <input type="text" class="previewText" value="Abc 090° WELLTEP" style="margin-bottom:8px">
+        <canvas class="preview"></canvas>
+        <details>
+          <summary>Ver todos los glifos generados</summary>
+          <canvas class="sheet" style="margin-top:8px"></canvas>
+        </details>
+        <div class="actions" style="margin-top:12px">
+          <button class="secondary downloadBtn">Descargar ${varName}.c</button>
+          <button class="secondary copyBtn">Copiar código</button>
+        </div>
+        <details>
+          <summary>Ver código generado</summary>
+          <textarea class="code" readonly></textarea>
+        </details>
+      `;
+      resultsEl.appendChild(card);
+
+      const previewCanvas = card.querySelector('.preview');
+      const sheetCanvas = card.querySelector('.sheet');
+      const textInput = card.querySelector('.previewText');
+      const codeArea = card.querySelector('.code');
+      codeArea.value = cCode;
+
+      const doPreview = () => renderTextPreview(previewCanvas, data, textInput.value);
+      doPreview();
+      renderGlyphSheet(sheetCanvas, data);
+      textInput.addEventListener('input', doPreview);
+
+      card.querySelector('.downloadBtn').addEventListener('click', () => {
+        const blob = new Blob([cCode], { type: 'text/x-c' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `${varName}.c`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+      });
+      card.querySelector('.copyBtn').addEventListener('click', () => {
+        navigator.clipboard.writeText(cCode);
+      });
+    }
+    statusEl.textContent = `Listo — ${sizes.length} archivo(s) generado(s). Revisa la vista previa de cada uno antes de usarlos.`;
+  }, 10);
+});
+</script>
+
+</body>
+</html>

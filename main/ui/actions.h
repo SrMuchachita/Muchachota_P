@@ -47,6 +47,12 @@ extern void action_settings_toggle_lock_pin(lv_event_t *e);
 extern void action_settings_btn_encoder(lv_event_t *e);
 extern void action_sysinfo_btn_update(lv_event_t *e);
 extern void action_settings_btn_tecnologia(lv_event_t *e);
+extern void action_settings_btn_camera(lv_event_t *e);
+extern void action_settings_btn_bluetooth(lv_event_t *e);
+extern void action_settings_bluetooth_disconnect(lv_event_t *e);
+extern void action_settings_bluetooth_block(lv_event_t *e);
+extern void action_settings_bluetooth_unblock_all(lv_event_t *e);
+extern void action_settings_wifi_edit(lv_event_t *e);
 extern void action_settings_btn_srv_limits(lv_event_t *e);
 extern void action_settings_video_tech_press(lv_event_t *e);
 extern void action_settings_video_tech_release(lv_event_t *e);
@@ -62,6 +68,7 @@ extern void hmi_update_panel_retheme(void);
  * reproduccion en curso (moviendo/reproduciendo/pausado) — sin esto el
  * SET_CARD generico de la grilla lo pisaria con el color neutro. */
 extern void hmi_modes_giro_retheme(void);
+extern void hmi_autorot_editor_retheme(void);
 
 /* Theme initializer — call once after create_screens() */
 extern void hmi_theme_apply(int theme);
@@ -80,6 +87,8 @@ extern lv_color_t hmi_theme_bd_btn_active(void);
 extern lv_color_t hmi_theme_txt_btn_active(void);
 extern lv_color_t hmi_theme_bd_card(void);
 extern lv_color_t hmi_theme_bg_topbar(void);
+extern lv_color_t hmi_theme_bg_card(void);
+extern lv_color_t hmi_theme_bg_indicator(void);
 /* Override this to re-theme the DEV panel on theme change */
 extern void hmi_dev_retheme(void);
 

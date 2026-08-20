@@ -15,6 +15,8 @@ typedef struct {
     /* General Controls - field labels */
     const char *lbl_robot_voltage;
     const char *lbl_console_voltage;
+    const char *lbl_robot_percent;
+    const char *lbl_console_percent;
     const char *lbl_angle_x;
     const char *lbl_angle_y;
     /* Modes - section titles */
@@ -123,6 +125,35 @@ typedef struct {
     const char *desc_technology;
     const char *desc_tech_a;
     const char *desc_tech_b;
+    /* Settings - Camera panel */
+    const char *nav_camera;
+    const char *title_camera;
+    const char *desc_camera;
+    const char *cam_label_reverse; /* cuadro que antes decia "RETROCEDIENDO" */
+    const char *cam_label_forward; /* cuadro "AVANZANDO" */
+    /* Settings - Bluetooth panel */
+    const char *nav_bluetooth;
+    const char *title_bluetooth;
+    const char *desc_bluetooth;
+    const char *lbl_bluetooth_connected;
+    const char *lbl_bluetooth_disconnected;
+    const char *lbl_bluetooth_mac;
+    const char *lbl_bluetooth_password_caption;
+    const char *btn_bluetooth_disconnect;
+    const char *btn_bluetooth_block;
+    const char *btn_bluetooth_unblock_all;
+    /* WiFi editor dialog (el boton de entrada, "Buscar redes", vive en
+     * Sysinfo > Update y reusa btn_wifi_scan mas abajo) */
+    const char *title_wifi_editor;
+    const char *lbl_wifi_ssid;
+    const char *lbl_wifi_pass;
+    /* WiFi editor dialog - escaneo de redes */
+    const char *btn_wifi_scan;
+    const char *btn_wifi_scan_manual; /* fila superior de la lista de resultados, vuelve a carga manual */
+    const char *lbl_wifi_scanning;
+    const char *lbl_wifi_scan_empty;
+    const char *lbl_wifi_scan_found_fmt; /* placeholder: %d cantidad de redes encontradas */
+    const char *lbl_wifi_scan_busy;
     /* Sysinfo - Update panel */
     const char *nav_update;
     const char *title_update;
@@ -135,9 +166,22 @@ typedef struct {
     const char *lbl_updating;
     const char *lbl_network_prefix;
     const char *lbl_update_duration_note;
+    /* System Info > Update > Console — estado de OTA_STATUS (0x1E) */
+    const char *ota_status_checking;
+    const char *ota_status_no_conn;
+    const char *ota_status_up_to_date;
+    const char *ota_status_updating;
+    const char *ota_status_success;
+    const char *ota_status_failed;
+    const char *ota_status_unknown;
     /* General Controls - Encoder card feet/meters toggle */
     const char *btn_feet;
     const char *btn_meters;
+    /* Panel de manejo (logo/combo joystick) — ver hmi_bigview_apply_lang() */
+    const char *panel_drive_distance_caption;
+    const char *panel_drive_trace_caption;
+    const char *panel_drive_robot_batt;
+    const char *panel_drive_console_batt;
 } lang_strings_t;
 
 typedef enum {

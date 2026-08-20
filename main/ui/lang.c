@@ -12,8 +12,10 @@ static const lang_strings_t s_es = {
     .sec_tilt           = " INCLINACION",
     .sec_led_brightness = " BRILLO LED ROBOT",
     .sec_encoder        = " ENCODER",
-    .lbl_robot_voltage  = "Voltaje Robot",
-    .lbl_console_voltage= "Voltaje Consola",
+    .lbl_robot_voltage  = "ROBOT",
+    .lbl_console_voltage= "CONSOLA",
+    .lbl_robot_percent  = "ROBOT",
+    .lbl_console_percent= "CONSOLA",
     .lbl_angle_x        = "Angulo X",
     .lbl_angle_y        = "Angulo Y",
     .sec_neck           = " ANGULO CUELLO",
@@ -69,14 +71,39 @@ static const lang_strings_t s_es = {
     .title_system_logs       = " REGISTROS",
     .title_quick_guide       = " GUIA RAPIDA",
     .guide_body              =
-        "Controles Generales:\n"
-        "  Monitorea bateria, angulos de inclinacion, encoder y brillo LED.\n\n"
-        "Modos:\n"
-        "  Ajusta angulos de cabeza/cuello, giro automatico o secuencias demo.\n\n"
-        "Ajustes:\n"
-        "  Configura brillo de pantalla, tema visual e idioma.\n\n"
-        "Info Sistema:\n"
-        "  Consulta detalles del dispositivo, version de firmware, registros y esta guia.",
+        "CONTROLES GENERALES:\n"
+        "  Barra superior: estado online/Bluetooth y bateria de consola.\n"
+        "  System Battery: nivel de bateria del robot.\n"
+        "  Tilt: angulos de inclinacion X/Y en vivo.\n"
+        "  Encoder: distancia recorrida - toca PIES/METROS para cambiar\n"
+        "  de unidad, RESET para reiniciar el conteo.\n"
+        "  Robot LED Brightness: control del LED del robot.\n\n"
+        "MODOS:\n"
+        "  Start/Stop Demo: inicia o detiene la secuencia demo.\n"
+        "  Control por Puntos: mueve cabeza/cuello en vivo y guarda una\n"
+        "  posicion central.\n"
+        "  Config Auto Rotation: elegi Recorrido 1/2, guarda puntos de\n"
+        "  cabeza/cuello, ajusta la velocidad (mantene presionado +/-\n"
+        "  para repetir), Test para probarlo.\n"
+        "  Iniciar Giro Automatico: reproduce el recorrido guardado;\n"
+        "  Stop Giro Automatico lo cancela.\n\n"
+        "AJUSTES:\n"
+        "  Brillo, Tema (Dark/Classic/Light), tipo de bateria\n"
+        "  (Voltios/%), Idioma (ES/EN/PT).\n"
+        "  User: cambia el nombre del dispositivo y el PIN de bloqueo.\n"
+        "  Encoder: calibra el perimetro del rodillo y pulsos/vuelta.\n"
+        "  Servo Limits: minimo/maximo en grados para Servo 1/2/3.\n"
+        "  Tecnologia: prende/apaga los LEDs de tecnologia de video\n"
+        "  de la consola.\n\n"
+        "INFO SISTEMA:\n"
+        "  Device: numeros de serie y nombre del dispositivo.\n"
+        "  Version: version de firmware/hardware/LVGL/ESP-IDF, fecha\n"
+        "  de build, cantidad de arranques.\n"
+        "  Logs: registro reciente del sistema.\n"
+        "  Update: activa el WiFi de esta pantalla para buscar su\n"
+        "  propia actualizacion. La seccion Console muestra el estado\n"
+        "  de actualizacion de la consola y tambien deja activar su WiFi.\n"
+        "  Guide: esta pantalla.",
     .alert_battery_critical  = "Bateria\ncritica",
     .alert_shutdown          = "APAGAR",
     .nav_user                = "Usuario",
@@ -94,7 +121,7 @@ static const lang_strings_t s_es = {
     .sub_enter_pin           = "Ingresa el PIN para continuar",
     .title_new_lock_pin      = "NUEVO PIN DE BLOQUEO",
     .sub_lock_pin_digits     = "4 digitos",
-    .lbl_lock_greeting_prefix= "HOLA %s",
+    .lbl_lock_greeting_prefix= "%s",
     .lbl_lock_signing_in     = "Ingresando...",
     .lbl_lock_access_granted = "Acceso concedido",
     .lbl_lock_pin_incorrect  = "PIN incorrecto",
@@ -111,6 +138,30 @@ static const lang_strings_t s_es = {
     .desc_technology         = "Tecnologia de video",
     .desc_tech_a             = "A: Cambio de senal de salida",
     .desc_tech_b             = "B: Resolucion de salida de senal o cambio de modo de TV",
+    .nav_camera              = "Camara",
+    .title_camera            = " CAMARA",
+    .desc_camera             = "Indicador de reversa, segun la direccion del motor del robot",
+    .cam_label_reverse       = "CAMARA #2",
+    .cam_label_forward       = "AVANZANDO",
+    .nav_bluetooth               = "Bluetooth",
+    .title_bluetooth             = " BLUETOOTH",
+    .desc_bluetooth              = "Dispositivo BLE conectado a la consola",
+    .lbl_bluetooth_connected     = "Conectado",
+    .lbl_bluetooth_disconnected  = "Sin conexion",
+    .lbl_bluetooth_mac           = "MAC:",
+    .lbl_bluetooth_password_caption = "Contrasena:",
+    .btn_bluetooth_disconnect    = "Desconectar",
+    .btn_bluetooth_block         = "Bloquear dispositivo",
+    .btn_bluetooth_unblock_all   = "Borrar bloqueados",
+    .title_wifi_editor       = "CONFIGURAR WIFI",
+    .lbl_wifi_ssid           = "Red (SSID)",
+    .lbl_wifi_pass           = "Contrasena",
+    .btn_wifi_scan               = "Buscar redes",
+    .btn_wifi_scan_manual        = "Escribir manualmente",
+    .lbl_wifi_scanning           = "Buscando redes...",
+    .lbl_wifi_scan_empty         = "No se encontraron redes",
+    .lbl_wifi_scan_found_fmt     = "%d redes encontradas",
+    .lbl_wifi_scan_busy          = "Escaneo no disponible, proba de nuevo",
     .nav_update              = "Actualizar",
     .title_update            = " ACTUALIZAR",
     .lbl_wifi_off            = "WiFi apagado",
@@ -122,8 +173,19 @@ static const lang_strings_t s_es = {
     .lbl_updating            = "Actualizando...",
     .lbl_network_prefix      = "Red: ",
     .lbl_update_duration_note = "La actualizacion puede demorar aproximadamente 35 segundos",
+    .ota_status_checking     = "Consultando servidor...",
+    .ota_status_no_conn      = "Sin conexion al servidor",
+    .ota_status_up_to_date   = "Firmware al dia",
+    .ota_status_updating     = "Actualizando...",
+    .ota_status_success      = "Actualizacion exitosa, reiniciando",
+    .ota_status_failed       = "Fallo la actualizacion",
+    .ota_status_unknown      = "Estado desconocido",
     .btn_feet                = "PIES",
     .btn_meters              = "METROS",
+    .panel_drive_distance_caption = "DISTANCIA RECORRIDA",
+    .panel_drive_trace_caption    = "TRAZA DE RECORRIDO",
+    .panel_drive_robot_batt       = "ROBOT",
+    .panel_drive_console_batt     = "CONSOLA",
 };
 
 /* ---- English ---- */
@@ -136,8 +198,10 @@ static const lang_strings_t s_en = {
     .sec_tilt           = " TILT",
     .sec_led_brightness = " ROBOT LED BRIGHTNESS",
     .sec_encoder        = " ENCODER",
-    .lbl_robot_voltage  = "Robot Voltage",
-    .lbl_console_voltage= "Console Voltage",
+    .lbl_robot_voltage  = "ROBOT",
+    .lbl_console_voltage= "CONSOLE",
+    .lbl_robot_percent  = "ROBOT",
+    .lbl_console_percent= "CONSOLE",
     .lbl_angle_x        = "Angle X",
     .lbl_angle_y        = "Angle Y",
     .sec_neck           = " NECK START ANGLE",
@@ -193,14 +257,37 @@ static const lang_strings_t s_en = {
     .title_system_logs       = " SYSTEM LOGS",
     .title_quick_guide       = " QUICK GUIDE",
     .guide_body              =
-        "General Controls:\n"
-        "  Monitor battery, tilt angles, encoder and LED brightness.\n\n"
-        "Modes:\n"
-        "  Set head/neck angles, run auto-rotation or demo sequences.\n\n"
-        "Settings:\n"
-        "  Configure display brightness, visual theme and language.\n\n"
-        "System Info:\n"
-        "  View device details, firmware version, logs and this guide.",
+        "GENERAL CONTROLS:\n"
+        "  Top bar: online/Bluetooth status and console battery.\n"
+        "  System Battery: robot battery level.\n"
+        "  Tilt: live X/Y inclination angles.\n"
+        "  Encoder: distance traveled - tap FT/METERS to switch units,\n"
+        "  RESET to zero it.\n"
+        "  Robot LED Brightness: slider for the robot's onboard LED.\n\n"
+        "MODES:\n"
+        "  Start/Stop Demo: run or stop the preset demo sequence.\n"
+        "  Control por Puntos: jog head/neck live and save a center\n"
+        "  position.\n"
+        "  Config Auto Rotation: pick Recorrido 1/2, save head/neck\n"
+        "  points, set speed (hold +/- to repeat fast), Test to preview.\n"
+        "  Iniciar Giro Automatico: play the saved recorrido; Stop Giro\n"
+        "  Automatico cancels it.\n\n"
+        "SETTINGS:\n"
+        "  Brightness, Theme (Dark/Classic/Light), Battery display\n"
+        "  (Volts/%), Language (ES/EN/PT).\n"
+        "  User: set the device name and a lock PIN for the screen.\n"
+        "  Encoder: calibrate roller perimeter and pulses/rev.\n"
+        "  Servo Limits: min/max degrees for Servo 1/2/3.\n"
+        "  Tecnologia: toggle the console's video tech LEDs.\n\n"
+        "SYSTEM INFO:\n"
+        "  Device: serial numbers and device name.\n"
+        "  Version: firmware/hardware/LVGL/ESP-IDF versions, build date,\n"
+        "  boot count.\n"
+        "  Logs: recent system log.\n"
+        "  Update: turn on this screen's WiFi to check for its own\n"
+        "  firmware update. The Console section shows the console\n"
+        "  board's own update status and lets you turn on its WiFi too.\n"
+        "  Guide: this screen.",
     .alert_battery_critical  = "Battery\ncritical",
     .alert_shutdown          = "SHUTDOWN",
     .nav_user                = "User",
@@ -218,7 +305,7 @@ static const lang_strings_t s_en = {
     .sub_enter_pin           = "Enter the PIN to continue",
     .title_new_lock_pin      = "NEW LOCK PIN",
     .sub_lock_pin_digits     = "4 digits",
-    .lbl_lock_greeting_prefix= "HELLO %s",
+    .lbl_lock_greeting_prefix= "%s",
     .lbl_lock_signing_in     = "Signing in...",
     .lbl_lock_access_granted = "Access granted",
     .lbl_lock_pin_incorrect  = "Incorrect PIN",
@@ -235,6 +322,30 @@ static const lang_strings_t s_en = {
     .desc_technology         = "Video technology",
     .desc_tech_a             = "A: Output signal change",
     .desc_tech_b             = "B: Output signal resolution or TV mode change",
+    .nav_camera              = "Camera",
+    .title_camera            = " CAMERA",
+    .desc_camera             = "Reverse indicator, driven by the robot's motor direction",
+    .cam_label_reverse       = "CAMERA #2",
+    .cam_label_forward       = "FORWARD",
+    .nav_bluetooth               = "Bluetooth",
+    .title_bluetooth             = " BLUETOOTH",
+    .desc_bluetooth              = "BLE device connected to the console",
+    .lbl_bluetooth_connected     = "Connected",
+    .lbl_bluetooth_disconnected  = "No connection",
+    .lbl_bluetooth_mac           = "MAC:",
+    .lbl_bluetooth_password_caption = "Password:",
+    .btn_bluetooth_disconnect    = "Disconnect",
+    .btn_bluetooth_block         = "Block device",
+    .btn_bluetooth_unblock_all   = "Clear blocklist",
+    .title_wifi_editor       = "WIFI SETUP",
+    .lbl_wifi_ssid           = "Network (SSID)",
+    .lbl_wifi_pass           = "Password",
+    .btn_wifi_scan               = "Scan networks",
+    .btn_wifi_scan_manual        = "Enter manually",
+    .lbl_wifi_scanning           = "Scanning for networks...",
+    .lbl_wifi_scan_empty         = "No networks found",
+    .lbl_wifi_scan_found_fmt     = "%d networks found",
+    .lbl_wifi_scan_busy          = "Scan unavailable, try again",
     .nav_update              = "Update",
     .title_update            = " UPDATE",
     .lbl_wifi_off            = "WiFi off",
@@ -246,8 +357,19 @@ static const lang_strings_t s_en = {
     .lbl_updating            = "Updating...",
     .lbl_network_prefix      = "Network: ",
     .lbl_update_duration_note = "The update may take approximately 35 seconds",
+    .ota_status_checking     = "Checking server...",
+    .ota_status_no_conn      = "No connection to server",
+    .ota_status_up_to_date   = "Firmware up to date",
+    .ota_status_updating     = "Updating...",
+    .ota_status_success      = "Update successful, restarting",
+    .ota_status_failed       = "Update failed",
+    .ota_status_unknown      = "Unknown status",
     .btn_feet                = "FEET",
     .btn_meters              = "METERS",
+    .panel_drive_distance_caption = "DISTANCE TRAVELED",
+    .panel_drive_trace_caption    = "TRAVEL TRACE",
+    .panel_drive_robot_batt       = "ROBOT",
+    .panel_drive_console_batt     = "CONSOLE",
 };
 
 /* ---- Portuguese ---- */
@@ -260,8 +382,10 @@ static const lang_strings_t s_pt = {
     .sec_tilt           = " INCLINACAO",
     .sec_led_brightness = " BRILHO LED ROBO",
     .sec_encoder        = " ENCODER",
-    .lbl_robot_voltage  = "Tensao Robo",
-    .lbl_console_voltage= "Tensao Console",
+    .lbl_robot_voltage  = "ROBO",
+    .lbl_console_voltage= "CONSOLE",
+    .lbl_robot_percent  = "ROBO",
+    .lbl_console_percent= "CONSOLE",
     .lbl_angle_x        = "Angulo X",
     .lbl_angle_y        = "Angulo Y",
     .sec_neck           = " ANGULO PESCOCO",
@@ -317,14 +441,39 @@ static const lang_strings_t s_pt = {
     .title_system_logs       = " LOGS SISTEMA",
     .title_quick_guide       = " GUIA RAPIDA",
     .guide_body              =
-        "Controles Gerais:\n"
-        "  Monitore bateria, angulos de inclinacao, encoder e brilho LED.\n\n"
-        "Modos:\n"
-        "  Ajuste angulos de cabeca/pescoco, rotacao automatica ou sequencias demo.\n\n"
-        "Configuracoes:\n"
-        "  Configure brilho da tela, tema visual e idioma.\n\n"
-        "Info Sistema:\n"
-        "  Veja detalhes do dispositivo, versao do firmware, logs e este guia.",
+        "CONTROLES GERAIS:\n"
+        "  Barra superior: status online/Bluetooth e bateria do console.\n"
+        "  System Battery: nivel de bateria do robo.\n"
+        "  Tilt: angulos de inclinacao X/Y em tempo real.\n"
+        "  Encoder: distancia percorrida - toque PES/METROS para trocar\n"
+        "  a unidade, RESET para zerar a contagem.\n"
+        "  Robot LED Brightness: controle do LED do robo.\n\n"
+        "MODOS:\n"
+        "  Start/Stop Demo: inicia ou para a sequencia demo.\n"
+        "  Control por Puntos: mova cabeca/pescoco ao vivo e salve uma\n"
+        "  posicao central.\n"
+        "  Config Auto Rotation: escolha Recorrido 1/2, salve pontos de\n"
+        "  cabeca/pescoco, ajuste a velocidade (segure +/- para\n"
+        "  repetir), Test para testar.\n"
+        "  Iniciar Giro Automatico: reproduz o percurso salvo; Stop Giro\n"
+        "  Automatico cancela.\n\n"
+        "CONFIGURACOES:\n"
+        "  Brilho, Tema (Dark/Classic/Light), tipo de bateria\n"
+        "  (Volts/%), Idioma (ES/EN/PT).\n"
+        "  User: altera o nome do dispositivo e o PIN de bloqueio.\n"
+        "  Encoder: calibra o perimetro do rolete e pulsos/volta.\n"
+        "  Servo Limits: minimo/maximo em graus para Servo 1/2/3.\n"
+        "  Tecnologia: liga/desliga os LEDs de tecnologia de video\n"
+        "  do console.\n\n"
+        "INFO SISTEMA:\n"
+        "  Device: numeros de serie e nome do dispositivo.\n"
+        "  Version: versao de firmware/hardware/LVGL/ESP-IDF, data do\n"
+        "  build, numero de inicializacoes.\n"
+        "  Logs: log recente do sistema.\n"
+        "  Update: ative o WiFi desta tela para buscar sua propria\n"
+        "  atualizacao. A secao Console mostra o status de atualizacao\n"
+        "  do console e tambem permite ativar o WiFi dele.\n"
+        "  Guide: esta tela.",
     .alert_battery_critical  = "Bateria\ncritica",
     .alert_shutdown          = "DESLIGAR",
     .nav_user                = "Usuario",
@@ -342,7 +491,7 @@ static const lang_strings_t s_pt = {
     .sub_enter_pin           = "Digite o PIN para continuar",
     .title_new_lock_pin      = "NOVO PIN DE BLOQUEIO",
     .sub_lock_pin_digits     = "4 digitos",
-    .lbl_lock_greeting_prefix= "OLA %s",
+    .lbl_lock_greeting_prefix= "%s",
     .lbl_lock_signing_in     = "Entrando...",
     .lbl_lock_access_granted = "Acesso concedido",
     .lbl_lock_pin_incorrect  = "PIN incorreto",
@@ -359,6 +508,30 @@ static const lang_strings_t s_pt = {
     .desc_technology         = "Tecnologia de video",
     .desc_tech_a             = "A: Mudanca de sinal de saida",
     .desc_tech_b             = "B: Resolucao de saida de sinal ou mudanca de modo de TV",
+    .nav_camera              = "Camera",
+    .title_camera            = " CAMERA",
+    .desc_camera             = "Indicador de re, controlado pela direcao do motor do robo",
+    .cam_label_reverse       = "CAMERA #2",
+    .cam_label_forward       = "AVANCANDO",
+    .nav_bluetooth               = "Bluetooth",
+    .title_bluetooth             = " BLUETOOTH",
+    .desc_bluetooth              = "Dispositivo BLE conectado ao console",
+    .lbl_bluetooth_connected     = "Conectado",
+    .lbl_bluetooth_disconnected  = "Sem conexao",
+    .lbl_bluetooth_mac           = "MAC:",
+    .lbl_bluetooth_password_caption = "Senha:",
+    .btn_bluetooth_disconnect    = "Desconectar",
+    .btn_bluetooth_block         = "Bloquear dispositivo",
+    .btn_bluetooth_unblock_all   = "Limpar bloqueados",
+    .title_wifi_editor       = "CONFIGURAR WIFI",
+    .lbl_wifi_ssid           = "Rede (SSID)",
+    .lbl_wifi_pass           = "Senha",
+    .btn_wifi_scan               = "Buscar redes",
+    .btn_wifi_scan_manual        = "Escrever manualmente",
+    .lbl_wifi_scanning           = "Buscando redes...",
+    .lbl_wifi_scan_empty         = "Nenhuma rede encontrada",
+    .lbl_wifi_scan_found_fmt     = "%d redes encontradas",
+    .lbl_wifi_scan_busy          = "Escaneamento indisponivel, tente de novo",
     .nav_update              = "Atualizar",
     .title_update            = " ATUALIZAR",
     .lbl_wifi_off            = "WiFi desligado",
@@ -370,8 +543,19 @@ static const lang_strings_t s_pt = {
     .lbl_updating            = "Atualizando...",
     .lbl_network_prefix      = "Rede: ",
     .lbl_update_duration_note = "A atualizacao pode demorar aproximadamente 35 segundos",
+    .ota_status_checking     = "Consultando servidor...",
+    .ota_status_no_conn      = "Sem conexao com o servidor",
+    .ota_status_up_to_date   = "Firmware atualizado",
+    .ota_status_updating     = "Atualizando...",
+    .ota_status_success      = "Atualizacao concluida, reiniciando",
+    .ota_status_failed       = "Falha na atualizacao",
+    .ota_status_unknown      = "Status desconhecido",
     .btn_feet                = "PES",
     .btn_meters              = "METROS",
+    .panel_drive_distance_caption = "DISTANCIA PERCORRIDA",
+    .panel_drive_trace_caption    = "TRACO DO PERCURSO",
+    .panel_drive_robot_batt       = "ROBO",
+    .panel_drive_console_batt     = "CONSOLE",
 };
 
 /* ---- Runtime state ---- */
@@ -411,8 +595,8 @@ void lang_apply(void) {
     LBL(objects.obj18, L->sec_encoder);
 
     /* General Controls - field labels */
-    LBL(objects.obj8,  L->lbl_robot_voltage);
-    LBL(objects.obj9,  L->lbl_console_voltage);
+    LBL(objects.robot_voltage_caption,   L->lbl_robot_voltage);
+    LBL(objects.console_voltage_caption, L->lbl_console_voltage);
     LBL(objects.obj12, L->lbl_angle_x);
     LBL(objects.obj13, L->lbl_angle_y);
 
@@ -581,19 +765,50 @@ void lang_apply(void) {
     if (objects.tech_desc_a) lv_label_set_text(objects.tech_desc_a, L->desc_tech_a);
     if (objects.tech_desc_b) lv_label_set_text(objects.tech_desc_b, L->desc_tech_b);
 
-    /* Sysinfo - Update nav button + panel (0=title,1=LED+status,2=button
-     * row,3=network info). El texto del boton WiFi y el estado dependen de
-     * estado que solo main.c conoce — ver hmi_extra_panels_apply_lang(). */
+    /* Settings - Camera nav button + panel (0=titulo, 1=descripcion,
+     * 2=fila RETROCEDIENDO, 3=fila AVANZANDO) */
+    CLBL(objects.settings_btn_camera, L->nav_camera);
+    if (objects.settings_content_camera) {
+        lv_obj_t *panel = objects.settings_content_camera;
+        lv_obj_t *title = lv_obj_get_child(panel, 0);
+        if (title) lv_label_set_text(title, L->title_camera);
+        lv_obj_t *desc = lv_obj_get_child(panel, 1);
+        if (desc) lv_label_set_text(desc, L->desc_camera);
+    }
+    if (objects.cam_reverse_label) lv_label_set_text(objects.cam_reverse_label, L->cam_label_reverse);
+    if (objects.cam_forward_label) lv_label_set_text(objects.cam_forward_label, L->cam_label_forward);
+
+    /* Settings - Bluetooth nav button + panel (0=titulo, 1=desc; el label
+     * de estado Conectado/Sin conexion depende del estado actual — ver
+     * hmi_extra_panels_apply_lang()) */
+    CLBL(objects.settings_btn_bluetooth, L->nav_bluetooth);
+    if (objects.settings_content_bluetooth) {
+        lv_obj_t *panel = objects.settings_content_bluetooth;
+        lv_obj_t *title = lv_obj_get_child(panel, 0);
+        if (title) lv_label_set_text(title, L->title_bluetooth);
+        lv_obj_t *desc = lv_obj_get_child(panel, 1);
+        if (desc) lv_label_set_text(desc, L->desc_bluetooth);
+    }
+    if (objects.bt_panel_mac_caption) lv_label_set_text(objects.bt_panel_mac_caption, L->lbl_bluetooth_mac);
+    if (objects.bt_panel_password_caption) lv_label_set_text(objects.bt_panel_password_caption, L->lbl_bluetooth_password_caption);
+    CLBL(objects.bt_panel_disconnect_btn, L->btn_bluetooth_disconnect);
+    CLBL(objects.bt_panel_block_btn, L->btn_bluetooth_block);
+    CLBL(objects.bt_panel_unblock_all_btn, L->btn_bluetooth_unblock_all);
+
+    /* Boton "Buscar redes" dentro de Sysinfo > Update (fila SSID + boton,
+     * ver create_panel_sysinfo_update() — oculta hasta activar el WiFi) */
+    CLBL(objects.update_wifi_edit_btn, L->btn_wifi_scan);
+
+    /* Sysinfo - Update nav button + panel (solo el titulo, child(0), se
+     * accede por indice; el resto de textos que dependen de estado que solo
+     * main.c conoce se resuelven en hmi_extra_panels_apply_lang()). */
     CLBL(objects.sysinfo_btn_update, L->nav_update);
     if (objects.sysinfo_content_update) {
         lv_obj_t *panel = objects.sysinfo_content_update;
         lv_obj_t *title = lv_obj_get_child(panel, 0);
         if (title) lv_label_set_text(title, L->title_update);
-        if (objects.update_network_label) {
-            char buf[48];
-            snprintf(buf, sizeof(buf), "%sWTP TALLER", L->lbl_network_prefix);
-            lv_label_set_text(objects.update_network_label, buf);
-        }
+        // Texto de "Network: <SSID>" (SSID real, no fijo): solo main.c sabe
+        // cual es y si esta conectado ahora mismo — ver hmi_extra_panels_apply_lang().
     }
     if (objects.update_duration_note) lv_label_set_text(objects.update_duration_note, L->lbl_update_duration_note);
 
