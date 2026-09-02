@@ -37,6 +37,7 @@ void ui_init() {
     create_panel_settings_tecnologia();
     create_panel_settings_camera();
     create_panel_settings_bluetooth();
+    create_panel_settings_joystick();
     create_panel_modes_auto_rotation();
     create_panel_settings_srv_limits();
     create_ota_progress_overlay();

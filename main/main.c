@@ -19,9 +19,11 @@
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "driver/ledc.h"
+#include "driver/gpio.h"
 #include "driver/i2c_master.h"
 #include "driver/uart.h"
 #include "esp_timer.h"
+#include "esp_rom_sys.h"
 #include "esp_random.h"
 #include "esp_log.h"
 #include "esp_err.h"
@@ -107,6 +109,11 @@ LV_FONT_DECLARE(lv_font_distance);
 #define BK_PIN        23
 #define LCD_LEDC_CH   1
 
+//*****************************************PINOUT BUZZER PASIVO***************************************************/
+#define BUZZER_PIN            49
+#define NAV_BEEP_FREQ_HZ      500
+#define NAV_BEEP_DURATION_MS  40
+
 
 //*****************************************DEFINICIONES I2C*********************************************************/
 // PinOut I2C0 TOUCH
@@ -119,9 +126,8 @@ LV_FONT_DECLARE(lv_font_distance);
 
 
 //*****************************************DEFINICIONES UART*****************************************************/
-// Pinout UART-HMI
-/*#define HMI_UART_TXD      (51) // TXD 
-#define HMI_UART_RXD      (52) // RXD */
+// Pinout UART-HMI — fijo, GPIO 51/52 (RS-485, conector J4). Ya no
+// seleccionable en runtime (antes tambien podia ser GPIO 26/27, conector J5).
 #define HMI_UART_PORT     UART_NUM_1
 #define UART_BUFFER_SIZE  (512)
 #define HMI_UART_TXD      (51) // TXD via MAX485 -> J4 RS-485
@@ -151,6 +157,29 @@ void app_lcd_init(void);
 void app_touch_init(void);
 void lcd_brightness_init(void);
 void lcd_set_brightness(int duty_cycle);
+void buzzer_init(void);
+void buzzer_tone(uint32_t freq_hz, uint32_t ms);
+void buzzer_test_all(void);
+void buzzer_nav_beep(void);
+void buzzer_sound_search(void);
+void buzzer_melody_update_start(void);
+void buzzer_melody_paired(void);
+void buzzer_sound_3(void);
+void buzzer_sound_4(void);
+void buzzer_sound_5(void);
+void buzzer_sound_6(void);
+void buzzer_sound_7(void);
+void buzzer_sound_8(void);
+void buzzer_sound_9(void);
+void buzzer_sound_10(void);
+void buzzer_sound_11(void);
+void buzzer_sound_12(void);
+void buzzer_sound_13(void);
+void buzzer_sound_14(void);
+void buzzer_sound_15(void);
+void buzzer_sound_16(void);
+void buzzer_sound_17(void);
+static void touch_click_sound_cb(lv_event_t *e);
 void vUartInit(void);
 void vHardwareInit(void);
 
@@ -185,8 +214,6 @@ static void rx_disp_log_frame(uint8_t reg, int32_t value);
 #endif
 #ifdef DEV_MODE
 static void dev_mode_init(void);
-static int  dev_uart_tx_pin(void);
-static int  dev_uart_rx_pin(void);
 static void dev_serial_add(const char *dir, const char *msg);
 static void dev_joy_log_update(void);
 static void encoder_display_toggle_create(void);
@@ -194,6 +221,7 @@ static void encoder_bigview_create(void);
 static void bigview_angle_trace_push(float angle_deg, float delta_dist_m);
 static void logo_secret_button_wire(void);
 static void camera_rl1_mode_wire(void);
+static void joystick_mode_wire(void);
 static void encoder_toggle_retheme(void);
 static void console_wifi_ui_refresh(void);
 static void settings_nav_enable_scroll(void);
@@ -365,6 +393,7 @@ static void update_led_blink_cb(lv_timer_t *t)
     (void)t;
     s_update_led_blink_on = !s_update_led_blink_on;
     if (objects.update_led) lv_led_set_brightness(objects.update_led, s_update_led_blink_on ? 255 : 0);
+    if (s_update_led_blink_on) buzzer_sound_search();
 }
 
 static void update_led_set_mode(update_led_mode_t mode)
@@ -517,6 +546,7 @@ void update_confirm_cb(lv_event_t *e)
     if (lbl) lv_label_set_text(lbl, g_lang->lbl_updating);
     lv_obj_add_state(objects.update_available_btn, LV_STATE_DISABLED);
 
+    buzzer_melody_update_start();
     ota_http_confirm_update();
 }
 
@@ -565,6 +595,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         ESP_LOGI(TAG, "WiFi conectado, IP: " IPSTR, IP2STR(&event->ip_info.ip));
+        buzzer_sound_8();
         ota_http_notify_connected();
         char buf[48];
         snprintf(buf, sizeof(buf), "%s" IPSTR, g_lang->lbl_connected_prefix, IP2STR(&event->ip_info.ip));
@@ -706,6 +737,7 @@ void app_main(void)
     esp_lv_adapter_touch_config_t touch_cfg = ESP_LV_ADAPTER_TOUCH_DEFAULT_CONFIG(disp, tp_touch_handle);
     lv_indev_t *touch = esp_lv_adapter_register_touch(&touch_cfg);
     assert(touch != NULL);
+    lv_indev_add_event_cb(touch, touch_click_sound_cb, LV_EVENT_PRESSED, NULL);
     // Fondo negro antes de arrancar el task de render: el primer frame pintado ya es negro
     lv_obj_set_style_bg_color(lv_scr_act(), lv_color_black(), LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_bg_opa(lv_scr_act(), LV_OPA_COVER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -843,15 +875,18 @@ void app_main(void)
         encoder_bigview_create();
         logo_secret_button_wire();
         camera_rl1_mode_wire();
+        joystick_mode_wire();
         wifi_settings_ui_init();
         esp_lv_adapter_unlock();
     }
     esp_lv_adapter_refresh_now(disp);
     lcd_set_brightness(100);
+    buzzer_sound_16();
     BOOT_MARK("ui_init done");
 
     panels_startup_init();
     BOOT_MARK("panels_startup_init done");
+
     hmi_log(LOG_OK, "Hardware initialized");
     hmi_log(LOG_OK, "Display ready");
     hmi_log(LOG_OK, "Touch ready");
@@ -919,17 +954,20 @@ void app_main(void)
                 lv_label_set_text(objects.sysinfo_console_serial_value, sn_short);
         }
 
-        /*SET VERSION INFO — panel: child(0)=titulo, child(1..6)=filas, cada fila child(1)=valor*/
+        /*SET VERSION INFO — panel: child(0)=titulo, child(1)=Firmware,
+          child(2)=Firmware WC (consola, se llena aparte por apply_fw_version()
+          cuando llega/reaparece el registro), child(3..7)=resto de filas,
+          cada fila child(1)=valor*/
         {
             lv_obj_t *panel = objects.sysinfo_content_version;
             if (panel) {
                 lv_obj_t *row;
                 row = lv_obj_get_child(panel, 1); if (row) lv_label_set_text(lv_obj_get_child(row, 1), esp_app_get_description()->version);
-                row = lv_obj_get_child(panel, 2); if (row) lv_label_set_text(lv_obj_get_child(row, 1), HW_REVISION);
-                row = lv_obj_get_child(panel, 3); if (row) lv_label_set_text(lv_obj_get_child(row, 1), LVGL_VERSION_STR);
-                row = lv_obj_get_child(panel, 4); if (row) lv_label_set_text(lv_obj_get_child(row, 1), ESPIDF_VERSION);
-                row = lv_obj_get_child(panel, 5); if (row) lv_label_set_text(lv_obj_get_child(row, 1), BUILD_DATE);
-                row = lv_obj_get_child(panel, 6);
+                row = lv_obj_get_child(panel, 3); if (row) lv_label_set_text(lv_obj_get_child(row, 1), HW_REVISION);
+                row = lv_obj_get_child(panel, 4); if (row) lv_label_set_text(lv_obj_get_child(row, 1), LVGL_VERSION_STR);
+                row = lv_obj_get_child(panel, 5); if (row) lv_label_set_text(lv_obj_get_child(row, 1), ESPIDF_VERSION);
+                row = lv_obj_get_child(panel, 6); if (row) lv_label_set_text(lv_obj_get_child(row, 1), BUILD_DATE);
+                row = lv_obj_get_child(panel, 7);
                 if (row) {
                     char bc_buff[12];
                     snprintf(bc_buff, sizeof(bc_buff), "%lu", hmi_get_boot_count());
@@ -1059,7 +1097,7 @@ void vTaskHmiRxProcess(void *pvParameters)
             static uint32_t last_ping_ms = 0;
             uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
             if (now_ms < 5000) goto skip_ping;  // esperar 5s al boot para que la consola arranque
-            if ((now_ms - last_ping_ms) >= 1000) {
+            if ((now_ms - last_ping_ms) >= 400) {
                 last_ping_ms = now_ms;
                 hmi_send_data(HMI_REG_PING, 1);
                 hmi_log(LOG_TX, ">> PING");
@@ -1279,8 +1317,6 @@ static void rx_disp_log_frame(uint8_t reg, int32_t value)
 #define DEV_UNLOCK_TAPS  3
 #define DEV_UNLOCK_MS    2000
 #define NVS_DEV_NS       "dev_cfg"
-#define NVS_KEY_UART_TX  "uart_tx"
-#define NVS_KEY_UART_RX  "uart_rx"
 #define NVS_KEY_PIN        "dev_pin"
 #define NVS_KEY_SERIAL     "serial_num"
 #define NVS_KEY_VIS_PANELS "vis_panels"
@@ -2035,7 +2071,7 @@ void hmi_auto_rotation_init(void)
 #define VIS_TEST (1 << 4)
 static uint8_t s_vis_panels = 0;
 #define DEV_PIN_LEN      4
-#define DEV_PIN_DEF      "1234"   // contraseña por defecto (editable aqui)
+#define DEV_PIN_DEF      "2402"   // contraseña por defecto (editable aqui)
 #define SERIAL_LOG_MAX   30       // entradas en el buffer del monitor serial
 #define SERIAL_LOG_LEN   54       // longitud maxima por entrada
 #define JOY_LOG_MAX      30       // entradas en el buffer del monitor joystick
@@ -2275,9 +2311,6 @@ static void dev_nvs_write_pin(const char *key, int val)
         nvs_set_i32(h, key, (int32_t)val); nvs_commit(h); nvs_close(h);
     }
 }
-static int dev_uart_tx_pin(void) { return dev_nvs_read_pin(NVS_KEY_UART_TX, HMI_UART_TXD); }
-static int dev_uart_rx_pin(void) { return dev_nvs_read_pin(NVS_KEY_UART_RX, HMI_UART_RXD); }
-
 #define NVS_KEY_UI_THEME "ui_theme"
 #define NVS_KEY_UI_LANG  "ui_lang"
 #define NVS_KEY_UI_BATD  "ui_batd"
@@ -3250,6 +3283,7 @@ static void encoder_bigview_open(void)
     bigview_battery_refresh();
     lv_obj_move_foreground(s_encoder_bigview_panel);
     lv_obj_remove_flag(s_encoder_bigview_panel, LV_OBJ_FLAG_HIDDEN);
+    buzzer_sound_17();
 }
 
 static void logo_bigview_open_cb(lv_event_t *e)
@@ -3390,20 +3424,6 @@ static void panel_create_one(uint8_t bit);
 static void dev_cb_close(lv_event_t *e)   { dev_panel_close(); }
 static void dev_cb_restart(lv_event_t *e) { esp_restart(); }
 
-static void dev_cb_uart_j5(lv_event_t *e)
-{
-    dev_nvs_write_pin(NVS_KEY_UART_TX, 26);
-    dev_nvs_write_pin(NVS_KEY_UART_RX, 27);
-    ESP_LOGW(TAG, "[DEV] UART GPIO26/27 guardado, reiniciando...");
-    esp_restart();
-}
-static void dev_cb_uart_header(lv_event_t *e)
-{
-    dev_nvs_write_pin(NVS_KEY_UART_TX, 51);
-    dev_nvs_write_pin(NVS_KEY_UART_RX, 52);
-    ESP_LOGW(TAG, "[DEV] UART GPIO51/52 guardado, reiniciando...");
-    esp_restart();
-}
 static void dev_cb_toggle_log(lv_event_t *e)
 {
     s_rx_log_enabled = !s_rx_log_enabled;
@@ -3430,6 +3450,7 @@ static void dev_cb_reset_boot_count(lv_event_t *e)
         ESP_LOGW(TAG, "[DEV] Boot count reseteado a 0");
     }
 }
+static void dev_cb_buzzer_test(lv_event_t *e) { (void)e; buzzer_test_all(); }
 static void dev_heap_timer_cb(lv_timer_t *t)
 {
     if (!s_dev_heap_label) return;
@@ -5116,9 +5137,6 @@ static void dev_panel_create(void)
 {
     if (s_dev_panel) return;
 
-    int cur_tx = dev_uart_tx_pin();
-    int cur_rx = dev_uart_rx_pin();
-
     // Panel DEV como hijo del mismo contenedor que los otros panels de sysinfo
     lv_obj_t *content_area = lv_obj_get_parent(objects.sysinfo_content_device);
     lv_obj_t *p = lv_obj_create(content_area);
@@ -5175,18 +5193,13 @@ static void dev_panel_create(void)
     lv_obj_set_style_border_opa(title, LV_OPA_COVER, 0);
     lv_obj_set_style_pad_left(title, 8, 0);
 
-    // Info rows — identicas a create_info_row de screens.c
+    // Info rows — identicas a create_info_row de screens.c. Fijo GPIO 51/52
+    // (RS-485, conector J4) — ya no es seleccionable, ver HMI_UART_TXD/RXD.
     char tx_str[12], rx_str[12];
-    snprintf(tx_str, sizeof(tx_str), "GPIO %d", cur_tx);
-    snprintf(rx_str, sizeof(rx_str), "GPIO %d", cur_rx);
+    snprintf(tx_str, sizeof(tx_str), "GPIO %d", HMI_UART_TXD);
+    snprintf(rx_str, sizeof(rx_str), "GPIO %d", HMI_UART_RXD);
     dev_make_info_row(p, "UART TX :", tx_str);
     dev_make_info_row(p, "UART RX :", rx_str);
-
-    dev_make_sep(p, "Pines UART — guarda y reinicia");
-    lv_obj_t *bj5  = dev_make_btn(p, "GPIO 26/27   Conector J5 (MX 1.25)", dev_cb_uart_j5);
-    lv_obj_t *bhdr = dev_make_btn(p, "GPIO 51/52   Pin Header",             dev_cb_uart_header);
-    // Resaltar el pin activo con el estilo activo del tema
-    hmi_style_btn(cur_tx == 26 ? bj5 : bhdr, true);
 
     dev_make_sep(p, "Herramientas");
 #ifdef TEST_UART_RX_DISPLAY
@@ -5195,8 +5208,9 @@ static void dev_panel_create(void)
     dev_make_btn(p, "Editar N\xC2\xB0 Serie",  dev_cb_edit_serial);
     dev_make_btn(p, "Editar Nombre Dispositivo", dev_cb_edit_device_name);
     dev_make_btn(p, "Cambiar PIN",         dev_cb_change_pin);
-    dev_make_btn(p, "Resetear PIN a 1234", dev_cb_reset_pin);
+    dev_make_btn(p, "Resetear PIN a " DEV_PIN_DEF, dev_cb_reset_pin);
     dev_make_btn(p, "Resetear Boot Count", dev_cb_reset_boot_count);
+    dev_make_btn(p, "Test Buzzer (todos los metodos)", dev_cb_buzzer_test);
 
     s_dev_heap_label = lv_label_create(p);
     char hbuf[36];
@@ -5238,7 +5252,7 @@ static void dev_panel_create(void)
     serial_panel_create(content_area, nav_col);
     test_panel_create(content_area, nav_col);
 
-    ESP_LOGW(TAG, "[DEV] Panel abierto, UART TX=%d RX=%d", cur_tx, cur_rx);
+    ESP_LOGW(TAG, "[DEV] Panel abierto, UART TX=%d RX=%d", HMI_UART_TXD, HMI_UART_RXD);
 }
 
 static void dot_timer_cb(lv_timer_t *t)
@@ -6148,10 +6162,12 @@ static void apply_fw_version(int32_t value)
     uint8_t major = (value >> 16) & 0xFF;
     uint8_t minor = (value >> 8)  & 0xFF;
     uint8_t patch = value & 0xFF;
-    char buff[40];
-    snprintf(buff, sizeof(buff), "Console firmware: v%u.%u.%u", major, minor, patch);
-    HMI_LV_SAFE_OBJ(objects.console_fw_version_label,
-        lv_label_set_text(objects.console_fw_version_label, buff));
+    char buff[16];
+    snprintf(buff, sizeof(buff), "v%u.%u.%u", major, minor, patch);
+    // Fila "Firmware WC :" en System Info > Version, debajo de "Firmware :"
+    // (la del propio HMI) — WC = firmware de la consola (WP_C_V9_UP).
+    HMI_LV_SAFE_OBJ(objects.sysinfo_console_fw_value,
+        lv_label_set_text(objects.sysinfo_console_fw_value, buff));
 }
 
 void hmi_reapply_cached_boot_regs(void)
@@ -6177,14 +6193,48 @@ static bool s_last_reversing_state = false; // ultimo estado de reversa conocido
 // dos handlers cada vez que cualquiera de las dos condiciones cambia.
 static bool s_servo_down_state = false;
 static bool s_combo_open_fired = false; // evita reabrir en cada mensaje mientras se sostienen ambos
+// Desactivado por ahora (pedido explicito) — el panel de manejo se sigue
+// pudiendo abrir con el logo o manteniendo B1 2s, solo se saco el combo de
+// joysticks (reversa + servo hacia abajo). Volver a poner en true para
+// reactivar el combo.
+#define BIGVIEW_JOYSTICK_COMBO_ENABLED false
+
 static void bigview_check_reverse_servo_combo(void)
 {
+    if (!BIGVIEW_JOYSTICK_COMBO_ENABLED) return;
     bool both = s_last_reversing_state && s_servo_down_state;
     if (both && !s_combo_open_fired) {
         s_combo_open_fired = true;
         HMI_LV_LOCKED(encoder_bigview_open());
     } else if (!both) {
         s_combo_open_fired = false;
+    }
+}
+
+// Segundo disparador para el panel de manejo: mantener presionado el boton
+// del joystick 1 (B1, HMI_REG_BUTTONS) por B1_HOLD_OPEN_MS. Se arma un timer
+// de un solo tiro al detectar el flanco de "presionado"; si suelta antes de
+// que se cumpla, se cancela. lv_timer_create/delete se llaman desde la tarea
+// de UART (no LVGL), por eso van dentro de HMI_LV_LOCKED — el callback en si
+// corre ya en contexto LVGL, como el resto de los timers de este archivo.
+#define B1_HOLD_OPEN_MS 1000
+static lv_timer_t *s_b1_hold_timer = NULL;
+
+static void b1_hold_timeout_cb(lv_timer_t *t)
+{
+    lv_timer_delete(t);
+    s_b1_hold_timer = NULL;
+    encoder_bigview_open();
+}
+
+static void b1_hold_check(bool pressed)
+{
+    if (pressed) {
+        if (!s_b1_hold_timer) {
+            HMI_LV_LOCKED(s_b1_hold_timer = lv_timer_create(b1_hold_timeout_cb, B1_HOLD_OPEN_MS, NULL));
+        }
+    } else if (s_b1_hold_timer) {
+        HMI_LV_LOCKED({ lv_timer_delete(s_b1_hold_timer); s_b1_hold_timer = NULL; });
     }
 }
 
@@ -6242,6 +6292,117 @@ static void camera_rl1_mode_wire(void)
     camera_rl1_mode_style_update();
 }
 
+//*************************************************************************************
+// Settings > Joystick — que hace el boton de cada joystick al presionarlo
+// (HMI_REG_J1/J2_BUTTON_MODE, BIDI). El HMI manda el valor elegido pero NO
+// resalta el boton al toque — espera que la consola confirme con el mismo
+// registro (mismo patron que WIFI_STATUS: no asumir, esperar confirmacion).
+// -1 = todavia no llego ninguna confirmacion (arranca sin nada resaltado; la
+// consola manda su valor real una vez al arrancar).
+//*************************************************************************************
+typedef enum {
+    JOY_BTN_MODE_CENTER_SRV3      = 0,
+    JOY_BTN_MODE_LED              = 1,
+    JOY_BTN_MODE_CENTER_HEAD_NECK = 2,
+    JOY_BTN_MODE_CAPTURE          = 3,
+} joy_button_mode_t;
+
+static int s_j1_button_mode = -1;
+static int s_j2_button_mode = -1;
+
+static void joystick_mode_style_update(int joy_num)
+{
+    int mode = (joy_num == 1) ? s_j1_button_mode : s_j2_button_mode;
+    lv_obj_t *b_servo3  = (joy_num == 1) ? objects.j1_mode_btn_servo3  : objects.j2_mode_btn_servo3;
+    lv_obj_t *b_led     = (joy_num == 1) ? objects.j1_mode_btn_led     : objects.j2_mode_btn_led;
+    lv_obj_t *b_center  = (joy_num == 1) ? objects.j1_mode_btn_center  : objects.j2_mode_btn_center;
+    lv_obj_t *b_capture = (joy_num == 1) ? objects.j1_mode_btn_capture : objects.j2_mode_btn_capture;
+    hmi_style_btn(b_servo3,  mode == JOY_BTN_MODE_CENTER_SRV3);
+    hmi_style_btn(b_led,     mode == JOY_BTN_MODE_LED);
+    hmi_style_btn(b_center,  mode == JOY_BTN_MODE_CENTER_HEAD_NECK);
+    hmi_style_btn(b_capture, mode == JOY_BTN_MODE_CAPTURE);
+}
+
+// user_data = el modo (joy_button_mode_t) que representa cada boton. NO
+// resaltan el boton solos — solo mandan el pedido; joystick_mode_style_update()
+// hace el resaltado real cuando llega la confirmacion (ver hmi_handle_reg()).
+static void joystick_j1_mode_cb(lv_event_t *e)
+{
+    int mode = (int)(intptr_t)lv_event_get_user_data(e);
+    hmi_send_data(HMI_REG_J1_BUTTON_MODE, mode);
+}
+static void joystick_j2_mode_cb(lv_event_t *e)
+{
+    int mode = (int)(intptr_t)lv_event_get_user_data(e);
+    hmi_send_data(HMI_REG_J2_BUTTON_MODE, mode);
+}
+
+// Cablea los 8 botones (4 por joystick) — llamar una vez desde app_main()
+// junto con el resto del cableado post ui_init().
+static void joystick_mode_wire(void)
+{
+    if (objects.j1_mode_btn_servo3)
+        lv_obj_add_event_cb(objects.j1_mode_btn_servo3, joystick_j1_mode_cb, LV_EVENT_CLICKED, (void *)(intptr_t)JOY_BTN_MODE_CENTER_SRV3);
+    if (objects.j1_mode_btn_led)
+        lv_obj_add_event_cb(objects.j1_mode_btn_led, joystick_j1_mode_cb, LV_EVENT_CLICKED, (void *)(intptr_t)JOY_BTN_MODE_LED);
+    if (objects.j1_mode_btn_center)
+        lv_obj_add_event_cb(objects.j1_mode_btn_center, joystick_j1_mode_cb, LV_EVENT_CLICKED, (void *)(intptr_t)JOY_BTN_MODE_CENTER_HEAD_NECK);
+    if (objects.j1_mode_btn_capture)
+        lv_obj_add_event_cb(objects.j1_mode_btn_capture, joystick_j1_mode_cb, LV_EVENT_CLICKED, (void *)(intptr_t)JOY_BTN_MODE_CAPTURE);
+
+    if (objects.j2_mode_btn_servo3)
+        lv_obj_add_event_cb(objects.j2_mode_btn_servo3, joystick_j2_mode_cb, LV_EVENT_CLICKED, (void *)(intptr_t)JOY_BTN_MODE_CENTER_SRV3);
+    if (objects.j2_mode_btn_led)
+        lv_obj_add_event_cb(objects.j2_mode_btn_led, joystick_j2_mode_cb, LV_EVENT_CLICKED, (void *)(intptr_t)JOY_BTN_MODE_LED);
+    if (objects.j2_mode_btn_center)
+        lv_obj_add_event_cb(objects.j2_mode_btn_center, joystick_j2_mode_cb, LV_EVENT_CLICKED, (void *)(intptr_t)JOY_BTN_MODE_CENTER_HEAD_NECK);
+    if (objects.j2_mode_btn_capture)
+        lv_obj_add_event_cb(objects.j2_mode_btn_capture, joystick_j2_mode_cb, LV_EVENT_CLICKED, (void *)(intptr_t)JOY_BTN_MODE_CAPTURE);
+
+    joystick_mode_style_update(1);
+    joystick_mode_style_update(2);
+}
+
+//*************************************************************************************
+// Toast breve para confirmar visualmente que llego un evento de Captura
+// (HMI_REG_J1/J2_CAPTURE_EVENT) — todavia sin accion propia definida (sacar
+// foto, guardar algo, etc. se define mas adelante); por ahora solo confirma
+// que el evento llega bien, mas el ESP_LOGI en hmi_handle_reg().
+//*************************************************************************************
+static lv_obj_t   *s_capture_toast       = NULL;
+static lv_timer_t *s_capture_toast_timer = NULL;
+
+static void capture_toast_hide_cb(lv_timer_t *t)
+{
+    lv_timer_delete(t);
+    s_capture_toast_timer = NULL;
+    if (s_capture_toast) { lv_obj_del(s_capture_toast); s_capture_toast = NULL; }
+}
+
+static void capture_toast_show(const char *text)
+{
+    if (s_capture_toast_timer) { lv_timer_delete(s_capture_toast_timer); s_capture_toast_timer = NULL; }
+    if (s_capture_toast) { lv_obj_del(s_capture_toast); s_capture_toast = NULL; }
+
+    lv_obj_t *p = lv_obj_create(lv_layer_top());
+    s_capture_toast = p;
+    lv_obj_set_size(p, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(p, lv_color_hex(0xff1a1a1a), 0);
+    lv_obj_set_style_bg_opa(p, 235, 0);
+    lv_obj_set_style_border_color(p, hmi_theme_accent(), 0);
+    lv_obj_set_style_border_width(p, 2, 0);
+    lv_obj_set_style_radius(p, 10, 0);
+    lv_obj_set_style_pad_hor(p, 24, 0);
+    lv_obj_set_style_pad_ver(p, 14, 0);
+    lv_obj_align(p, LV_ALIGN_TOP_MID, 0, 60);
+    lv_obj_t *lbl = lv_label_create(p);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffffff), 0);
+    lv_label_set_text(lbl, text);
+
+    s_capture_toast_timer = lv_timer_create(capture_toast_hide_cb, 900, NULL);
+}
+
 // Centro real del joystick de servo (JOY2) en reposo — confirmado en
 // pruebas (~2132, no 0) — y zona muerta a partir de ahi para considerar
 // que se empujo hacia abajo (abajo = Y aumenta).
@@ -6285,6 +6446,7 @@ void hmi_handle_reg(uint8_t reg, int32_t value)
 
     case HMI_REG_BLUETOOTH_INDICATOR:
     {
+        bool bt_was_connected = s_bt_connected;
         HMI_LV_SAFE_OBJ(objects.led_bluetooth, lv_led_set_brightness(objects.led_bluetooth, (uint8_t)value));
         HMI_LV_SAFE_OBJ(s_bigview_led_bt, lv_led_set_brightness(s_bigview_led_bt, (uint8_t)value));
         HMI_LV_SAFE_OBJ(objects.bt_panel_led, lv_led_set_brightness(objects.bt_panel_led, (uint8_t)value));
@@ -6294,6 +6456,11 @@ void hmi_handle_reg(uint8_t reg, int32_t value)
         if (!s_bt_connected) {
             s_bt_mac_hi = 0;
             HMI_LV_SAFE_OBJ(objects.bt_panel_mac_label, lv_label_set_text(objects.bt_panel_mac_label, "---"));
+        }
+        if (s_bt_connected && !bt_was_connected) {
+            buzzer_melody_paired();
+        } else if (!s_bt_connected && bt_was_connected) {
+            buzzer_sound_12();
         }
         ESP_LOGI(TAG, "HMI_REG_BLUETOOTH_INDICATOR: %d", (uint8_t)value);
         break;
@@ -6529,6 +6696,41 @@ void hmi_handle_reg(uint8_t reg, int32_t value)
         break;
     }
 
+    case HMI_REG_J1_BUTTON_MODE:
+    {
+        // Confirmacion de la consola (mismo registro que se manda para
+        // pedir el cambio) — recien aca se resalta el boton, nunca al
+        // toque. Tambien llega solo, sin pedirlo, una vez al arrancar.
+        s_j1_button_mode = (int)value;
+        ESP_LOGI(TAG, "HMI_REG_J1_BUTTON_MODE confirmado: %d", (int)value);
+        HMI_LV_LOCKED(joystick_mode_style_update(1));
+        break;
+    }
+
+    case HMI_REG_J2_BUTTON_MODE:
+    {
+        s_j2_button_mode = (int)value;
+        ESP_LOGI(TAG, "HMI_REG_J2_BUTTON_MODE confirmado: %d", (int)value);
+        HMI_LV_LOCKED(joystick_mode_style_update(2));
+        break;
+    }
+
+    case HMI_REG_J1_CAPTURE_EVENT:
+    {
+        // Sin accion propia definida todavia (ver nota junto al registro en
+        // main.h) — por ahora solo confirma que el evento llega bien.
+        ESP_LOGI(TAG, "HMI_REG_J1_CAPTURE_EVENT recibido");
+        HMI_LV_LOCKED(capture_toast_show("Captura J1"));
+        break;
+    }
+
+    case HMI_REG_J2_CAPTURE_EVENT:
+    {
+        ESP_LOGI(TAG, "HMI_REG_J2_CAPTURE_EVENT recibido");
+        HMI_LV_LOCKED(capture_toast_show("Captura J2"));
+        break;
+    }
+
     case HMI_REG_BLUETOOTH_MAC_HI:
     {
         // Bytes 5-4 de la MAC — se cachean y se muestran recien cuando
@@ -6595,6 +6797,8 @@ void hmi_handle_reg(uint8_t reg, int32_t value)
         s_joy_btn1 = btn_j1; s_joy_btn2 = btn_j2;
         dev_joy_log_update();
 #endif
+        // Mantener B1 (joystick 1) presionado 2s abre el panel de manejo.
+        b1_hold_check(btn_j1);
         break;
     }
 
@@ -6983,6 +7187,9 @@ void vHardwareInit(void)
     // Setear el brillo a 0 (Inicialmente)
     lcd_set_brightness(0);
 
+    // Inicializar buzzer
+    buzzer_init();
+
     // Uart Init
     vUartInit();
 }
@@ -7023,6 +7230,403 @@ void lcd_brightness_init(void)
 
     ledc_timer_config(&LCD_backlight_timer);
     ledc_channel_config(&LCD_backlight_channel);
+}
+
+//*************************************************************************************
+void buzzer_init(void)
+{
+    gpio_config_t cfg = {
+        .pin_bit_mask = (1ULL << BUZZER_PIN),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE};
+    gpio_config(&cfg);
+    gpio_set_level(BUZZER_PIN, 1); // idle = silencio
+}
+
+// Interruptor general del buzzer — desactivado por ahora (pedido explicito).
+// En false, buzzer_tone() no hace nada, asi que todas las melodias (nav
+// beep, sonidos de update/vinculado, panel de manejo, etc.) quedan mudas de
+// una sin tener que tocar cada llamado. Volver a poner en true para
+// reactivarlo entero. El test de diagnostico (buzzer_test_all()) IGNORA
+// este flag a proposito, para poder probar aunque el buzzer normal este apagado.
+#define BUZZER_ENABLED true
+
+// Nucleo real de generacion de tono (onda cuadrada por software, bit-bang
+// del GPIO) — sin el gate de BUZZER_ENABLED. buzzer_tone() y el test de
+// diagnostico comparten esto.
+static void buzzer_tone_raw(uint32_t freq_hz, uint32_t ms)
+{
+    uint32_t half_period_us = 500000 / freq_hz;
+    int64_t end_us = esp_timer_get_time() + (int64_t)ms * 1000;
+
+    while (esp_timer_get_time() < end_us) {
+        gpio_set_level(BUZZER_PIN, 0);
+        esp_rom_delay_us(half_period_us);
+        gpio_set_level(BUZZER_PIN, 1);
+        esp_rom_delay_us(half_period_us);
+    }
+
+    gpio_set_level(BUZZER_PIN, 1); // vuelve a idle
+}
+
+// Genera un tono (onda cuadrada) de freq_hz durante ms milisegundos. Bloqueante.
+void buzzer_tone(uint32_t freq_hz, uint32_t ms)
+{
+    if (!BUZZER_ENABLED) return;
+    buzzer_tone_raw(freq_hz, ms);
+}
+
+//*************************************************************************************
+// Test de diagnostico del buzzer (GPIO49) — el usuario reporto que no suena
+// con el metodo normal (onda cuadrada por software). Prueba varios metodos
+// distintos en secuencia, con pausas y log por serial/UI, para encontrar
+// cual (si alguno) produce sonido con el hardware real conectado a ese pin.
+// Ignora BUZZER_ENABLED a proposito — es una herramienta de diagnostico, no
+// una melodia normal.
+//*************************************************************************************
+#define BUZZER_TEST_LEDC_TIMER   LEDC_TIMER_2
+#define BUZZER_TEST_LEDC_CH      LEDC_CHANNEL_2
+
+// Metodo B: mismo bit-bang de siempre, pero barriendo varias frecuencias
+// (los piezo suelen tener un pico de resonancia donde suenan bien mas
+// fuerte que en el resto del rango) y con mas tiempo por nota.
+static void buzzer_test_sweep_bitbang(void)
+{
+    const uint32_t freqs[] = { 500, 1000, 1500, 2000, 2731, 3000, 4000, 5000 };
+    for (size_t i = 0; i < sizeof(freqs) / sizeof(freqs[0]); i++) {
+        ESP_LOGW(TAG, "[BUZZER TEST] bit-bang %lu Hz", (unsigned long)freqs[i]);
+        buzzer_tone_raw(freqs[i], 400);
+        vTaskDelay(pdMS_TO_TICKS(150));
+    }
+}
+
+// Metodo C: mismas frecuencias pero generadas con PWM por hardware (LEDC) en
+// vez de toggle por software — senal mas limpia/estable, puede sonar
+// distinto (mas fuerte o mas parejo) que el bit-bang si el piezo es sensible
+// al jitter del software.
+static void buzzer_test_sweep_ledc(void)
+{
+    static bool ledc_ready = false;
+    if (!ledc_ready) {
+        ledc_timer_config_t timer_cfg = {
+            .speed_mode      = LEDC_LOW_SPEED_MODE,
+            .duty_resolution = LEDC_TIMER_10_BIT,
+            .timer_num       = BUZZER_TEST_LEDC_TIMER,
+            .freq_hz         = 1000,
+            .clk_cfg         = LEDC_AUTO_CLK,
+        };
+        ledc_timer_config(&timer_cfg);
+        ledc_channel_config_t ch_cfg = {
+            .gpio_num   = BUZZER_PIN,
+            .speed_mode = LEDC_LOW_SPEED_MODE,
+            .channel    = BUZZER_TEST_LEDC_CH,
+            .intr_type  = LEDC_INTR_DISABLE,
+            .timer_sel  = BUZZER_TEST_LEDC_TIMER,
+            .duty       = 0,
+            .hpoint     = 0,
+        };
+        ledc_channel_config(&ch_cfg);
+        ledc_ready = true;
+    }
+
+    const uint32_t freqs[] = { 500, 1000, 1500, 2000, 2731, 3000, 4000, 5000 };
+    for (size_t i = 0; i < sizeof(freqs) / sizeof(freqs[0]); i++) {
+        ESP_LOGW(TAG, "[BUZZER TEST] LEDC (PWM hw) %lu Hz", (unsigned long)freqs[i]);
+        ledc_set_freq(LEDC_LOW_SPEED_MODE, BUZZER_TEST_LEDC_TIMER, freqs[i]);
+        ledc_set_duty(LEDC_LOW_SPEED_MODE, BUZZER_TEST_LEDC_CH, 512); // ~50%
+        ledc_update_duty(LEDC_LOW_SPEED_MODE, BUZZER_TEST_LEDC_CH);
+        vTaskDelay(pdMS_TO_TICKS(400));
+        ledc_set_duty(LEDC_LOW_SPEED_MODE, BUZZER_TEST_LEDC_CH, 0);
+        ledc_update_duty(LEDC_LOW_SPEED_MODE, BUZZER_TEST_LEDC_CH);
+        vTaskDelay(pdMS_TO_TICKS(150));
+    }
+    // Devolver el pin a salida GPIO simple para que buzzer_tone_raw() (bit-bang)
+    // lo pueda seguir usando despues sin quedar atado al periferico LEDC.
+    gpio_set_direction(BUZZER_PIN, GPIO_MODE_OUTPUT);
+    gpio_set_level(BUZZER_PIN, 1);
+}
+
+// Metodo D: nivel DC sostenido (sin alternar) — por si es un buzzer "activo"
+// (con oscilador propio adentro, sueña solo con tener el pin en alto/bajo
+// fijo, no necesita que le mandes la onda vos).
+static void buzzer_test_dc_levels(void)
+{
+    ESP_LOGW(TAG, "[BUZZER TEST] DC sostenido: pin en ALTO por 1s");
+    gpio_set_level(BUZZER_PIN, 1);
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    gpio_set_level(BUZZER_PIN, 0);
+    vTaskDelay(pdMS_TO_TICKS(200));
+
+    ESP_LOGW(TAG, "[BUZZER TEST] DC sostenido: pin en BAJO por 1s");
+    gpio_set_level(BUZZER_PIN, 0);
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    gpio_set_level(BUZZER_PIN, 1); // vuelve a idle
+}
+
+static void buzzer_test_task(void *arg)
+{
+    (void)arg;
+    hmi_log(LOG_WARN, "[BUZZER TEST] Arrancando — escuchar con atencion");
+
+    ESP_LOGW(TAG, "[BUZZER TEST] === Metodo A: bit-bang 1000Hz 500ms (el de siempre) ===");
+    buzzer_tone_raw(1000, 500);
+    vTaskDelay(pdMS_TO_TICKS(500));
+
+    ESP_LOGW(TAG, "[BUZZER TEST] === Metodo B: barrido de frecuencias, bit-bang ===");
+    buzzer_test_sweep_bitbang();
+    vTaskDelay(pdMS_TO_TICKS(500));
+
+    ESP_LOGW(TAG, "[BUZZER TEST] === Metodo C: barrido de frecuencias, PWM por hardware (LEDC) ===");
+    buzzer_test_sweep_ledc();
+    vTaskDelay(pdMS_TO_TICKS(500));
+
+    ESP_LOGW(TAG, "[BUZZER TEST] === Metodo D: nivel DC sostenido (buzzer activo) ===");
+    buzzer_test_dc_levels();
+
+    hmi_log(LOG_WARN, "[BUZZER TEST] Terminado");
+    vTaskDelete(NULL);
+}
+
+// Lanza el test en su propia tarea (no bloquear LVGL). Ver comentario arriba
+// de la seccion para el detalle de cada metodo.
+void buzzer_test_all(void)
+{
+    xTaskCreate(buzzer_test_task, "buzzer_test", 3072, NULL, 1, NULL);
+}
+
+void buzzer_nav_beep(void)
+{
+    buzzer_tone(NAV_BEEP_FREQ_HZ, NAV_BEEP_DURATION_MS);
+}
+
+// Blip corto tipo "buscando", pensado para sonar en sincro con el parpadeo
+// del LED blanco de Update mientras busca conexion
+static void buzzer_sound_search_task(void *arg)
+{
+    (void)arg;
+    buzzer_tone(700, 40);
+    vTaskDelete(NULL);
+}
+
+void buzzer_sound_search(void)
+{
+    xTaskCreate(buzzer_sound_search_task, "buzzer_melody", 2048, NULL, 1, NULL);
+}
+
+// Arpegio ascendente tipo "power-up" retro, suena al confirmar la actualizacion
+static void buzzer_melody_update_start_task(void *arg)
+{
+    (void)arg;
+    buzzer_tone(523, 70);  // C5
+    buzzer_tone(659, 70);  // E5
+    buzzer_tone(784, 70);  // G5
+    buzzer_tone(1046, 100); // C6
+    vTaskDelete(NULL);
+}
+
+// Lanza la melodia en su propia tarea, para no bloquear ni el render de LVGL
+// ni el arranque de la descarga OTA mientras suena.
+void buzzer_melody_update_start(void)
+{
+    xTaskCreate(buzzer_melody_update_start_task, "buzzer_melody", 2048, NULL, 1, NULL);
+}
+
+// "Chirp" ascendente de dos notas tipo "vinculado/conectado" retro
+static void buzzer_melody_paired_task(void *arg)
+{
+    (void)arg;
+    buzzer_tone(880, 60);   // A5
+    buzzer_tone(1319, 120); // E6
+    vTaskDelete(NULL);
+}
+
+void buzzer_melody_paired(void)
+{
+    xTaskCreate(buzzer_melody_paired_task, "buzzer_melody", 2048, NULL, 1, NULL);
+}
+
+// ==================== TEMP: candidatos de sonido para probar (sin integrar) ====================
+
+// Sonido 3 — tick corto, pensado para arrastrar un deslizante (repetible seguido)
+static void buzzer_sound_3_task(void *arg)
+{
+    (void)arg;
+    buzzer_tone(300, 25);
+    vTaskDelete(NULL);
+}
+void buzzer_sound_3(void) { xTaskCreate(buzzer_sound_3_task, "buzzer_melody", 2048, NULL, 1, NULL); }
+
+// Sonido 4 — barrido ascendente largo, pensado para inicializacion/boot
+static void buzzer_sound_4_task(void *arg)
+{
+    (void)arg;
+    buzzer_tone(262, 90);  // C4
+    buzzer_tone(392, 90);  // G4
+    buzzer_tone(523, 140); // C5
+    vTaskDelete(NULL);
+}
+void buzzer_sound_4(void) { xTaskCreate(buzzer_sound_4_task, "buzzer_melody", 2048, NULL, 1, NULL); }
+
+// Sonido 5 — dos notas agudas, pensado para confirmar/OK
+static void buzzer_sound_5_task(void *arg)
+{
+    (void)arg;
+    buzzer_tone(988, 60);  // B5
+    buzzer_tone(1319, 100); // E6
+    vTaskDelete(NULL);
+}
+void buzzer_sound_5(void) { xTaskCreate(buzzer_sound_5_task, "buzzer_melody", 2048, NULL, 1, NULL); }
+
+// Sonido 6 — descendente grave, pensado para error/rechazado
+static void buzzer_sound_6_task(void *arg)
+{
+    (void)arg;
+    buzzer_tone(220, 100);
+    buzzer_tone(147, 150);
+    vTaskDelete(NULL);
+}
+void buzzer_sound_6(void) { xTaskCreate(buzzer_sound_6_task, "buzzer_melody", 2048, NULL, 1, NULL); }
+
+// Sonido 7 — doble blip identico, pensado para notificacion/alerta
+static void buzzer_sound_7_task(void *arg)
+{
+    (void)arg;
+    buzzer_tone(1000, 50);
+    vTaskDelay(pdMS_TO_TICKS(60));
+    buzzer_tone(1000, 50);
+    vTaskDelete(NULL);
+}
+void buzzer_sound_7(void) { xTaskCreate(buzzer_sound_7_task, "buzzer_melody", 2048, NULL, 1, NULL); }
+
+// Sonido 8 — arpegio largo de 5 notas, pensado para logro/exito
+static void buzzer_sound_8_task(void *arg)
+{
+    (void)arg;
+    buzzer_tone(523, 60);
+    buzzer_tone(659, 60);
+    buzzer_tone(784, 60);
+    buzzer_tone(1046, 60);
+    buzzer_tone(1318, 120);
+    vTaskDelete(NULL);
+}
+void buzzer_sound_8(void) { xTaskCreate(buzzer_sound_8_task, "buzzer_melody", 2048, NULL, 1, NULL); }
+
+// Sonido 9 — alternativa de vinculacion: 3 notas rapidas ascendentes ("handshake")
+static void buzzer_sound_9_task(void *arg)
+{
+    (void)arg;
+    buzzer_tone(659, 50);  // E5
+    buzzer_tone(880, 50);  // A5
+    buzzer_tone(1174, 90); // D6
+    vTaskDelete(NULL);
+}
+void buzzer_sound_9(void) { xTaskCreate(buzzer_sound_9_task, "buzzer_melody", 2048, NULL, 1, NULL); }
+
+// Sonido 10 — alternativa de vinculacion: alternado rapido tipo "ping-pong"
+static void buzzer_sound_10_task(void *arg)
+{
+    (void)arg;
+    buzzer_tone(800, 35);
+    buzzer_tone(1200, 35);
+    buzzer_tone(800, 35);
+    buzzer_tone(1200, 60);
+    vTaskDelete(NULL);
+}
+void buzzer_sound_10(void) { xTaskCreate(buzzer_sound_10_task, "buzzer_melody", 2048, NULL, 1, NULL); }
+
+// Sonido 11 — rampa lenta grave a agudo, pensado para "power on" / encendido
+static void buzzer_sound_11_task(void *arg)
+{
+    (void)arg;
+    buzzer_tone(130, 80);
+    buzzer_tone(196, 80);
+    buzzer_tone(262, 80);
+    buzzer_tone(349, 120);
+    vTaskDelete(NULL);
+}
+void buzzer_sound_11(void) { xTaskCreate(buzzer_sound_11_task, "buzzer_melody", 2048, NULL, 1, NULL); }
+
+// Sonido 12 — rampa agudo a grave, pensado para "power off" / desconexion
+static void buzzer_sound_12_task(void *arg)
+{
+    (void)arg;
+    buzzer_tone(523, 80);
+    buzzer_tone(392, 80);
+    buzzer_tone(262, 80);
+    buzzer_tone(131, 120);
+    vTaskDelete(NULL);
+}
+void buzzer_sound_12(void) { xTaskCreate(buzzer_sound_12_task, "buzzer_melody", 2048, NULL, 1, NULL); }
+
+// Sonido 13 — doble tick corto, pensado para prender/apagar un switch
+static void buzzer_sound_13_task(void *arg)
+{
+    (void)arg;
+    buzzer_tone(500, 30);
+    vTaskDelay(pdMS_TO_TICKS(30));
+    buzzer_tone(700, 30);
+    vTaskDelete(NULL);
+}
+void buzzer_sound_13(void) { xTaskCreate(buzzer_sound_13_task, "buzzer_melody", 2048, NULL, 1, NULL); }
+
+// Sonido 14 — alternancia suave tipo sirena, pensado para advertencia (mas suave que error)
+static void buzzer_sound_14_task(void *arg)
+{
+    (void)arg;
+    buzzer_tone(600, 70);
+    buzzer_tone(500, 70);
+    buzzer_tone(600, 70);
+    buzzer_tone(500, 70);
+    vTaskDelete(NULL);
+}
+void buzzer_sound_14(void) { xTaskCreate(buzzer_sound_14_task, "buzzer_melody", 2048, NULL, 1, NULL); }
+
+// Sonido 15 — trino rapido y nota final sostenida, pensado para mantener presionado/confirmar
+static void buzzer_sound_15_task(void *arg)
+{
+    (void)arg;
+    buzzer_tone(700, 40);
+    buzzer_tone(900, 40);
+    buzzer_tone(700, 40);
+    buzzer_tone(1000, 150);
+    vTaskDelete(NULL);
+}
+void buzzer_sound_15(void) { xTaskCreate(buzzer_sound_15_task, "buzzer_melody", 2048, NULL, 1, NULL); }
+
+// Sonido 16 — fanfarria larga de 5 notas con nota final sostenida, pensado para
+// cuando termina de aparecer todo el grafico/splash al iniciar sesion
+static void buzzer_sound_16_task(void *arg)
+{
+    (void)arg;
+    buzzer_tone(392, 80);   // G4
+    buzzer_tone(523, 80);   // C5
+    buzzer_tone(659, 80);   // E5
+    buzzer_tone(784, 80);   // G5
+    buzzer_tone(1046, 250); // C6 sostenida
+    vTaskDelete(NULL);
+}
+void buzzer_sound_16(void) { xTaskCreate(buzzer_sound_16_task, "buzzer_melody", 2048, NULL, 1, NULL); }
+
+// Sonido 17 — acorde ascendente grave que "engancha" en una nota sostenida,
+// pensado para cuando se entra al modo manejo/control del robot
+static void buzzer_sound_17_task(void *arg)
+{
+    (void)arg;
+    buzzer_tone(220, 50);  // A3
+    buzzer_tone(294, 50);  // D4
+    buzzer_tone(370, 50);  // F#4
+    buzzer_tone(440, 180); // A4 sostenida
+    vTaskDelete(NULL);
+}
+void buzzer_sound_17(void) { xTaskCreate(buzzer_sound_17_task, "buzzer_melody", 2048, NULL, 1, NULL); }
+// ==================== FIN TEMP: candidatos de sonido ====================
+
+// Suena en cada toque de pantalla, sin importar que widget se tocó
+static void touch_click_sound_cb(lv_event_t *e)
+{
+    buzzer_nav_beep();
 }
 
 void app_lcd_init()
@@ -7147,16 +7751,9 @@ void vUartInit(void)
     // Establecer la configuracion
     uart_param_config(HMI_UART_PORT, &uart_config);
 
-    // Pines de UART (DEV_MODE los lee de NVS; si no hay valor usa el #define)
-#ifdef DEV_MODE
-    int uart_tx = dev_uart_tx_pin();
-    int uart_rx = dev_uart_rx_pin();
-    ESP_LOGW(TAG, "UART pines (NVS): TX=GPIO%d  RX=GPIO%d", uart_tx, uart_rx);
-#else
-    int uart_tx = HMI_UART_TXD;
-    int uart_rx = HMI_UART_RXD;
-#endif
-    uart_set_pin(HMI_UART_PORT, uart_tx, uart_rx, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    // Pines de UART fijos — GPIO 51/52 (RS-485, conector J4), ya no
+    // seleccionables desde el panel DEV.
+    uart_set_pin(HMI_UART_PORT, HMI_UART_TXD, HMI_UART_RXD, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
 
     // Instalar el controlador
     uart_driver_install(HMI_UART_PORT, UART_BUFFER_SIZE, UART_BUFFER_SIZE, 50, &xQueueUartEvent, 0);

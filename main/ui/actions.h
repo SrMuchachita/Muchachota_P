@@ -49,6 +49,7 @@ extern void action_sysinfo_btn_update(lv_event_t *e);
 extern void action_settings_btn_tecnologia(lv_event_t *e);
 extern void action_settings_btn_camera(lv_event_t *e);
 extern void action_settings_btn_bluetooth(lv_event_t *e);
+extern void action_settings_btn_joystick(lv_event_t *e);
 extern void action_settings_bluetooth_disconnect(lv_event_t *e);
 extern void action_settings_bluetooth_block(lv_event_t *e);
 extern void action_settings_bluetooth_unblock_all(lv_event_t *e);

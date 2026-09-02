@@ -152,11 +152,11 @@ typedef struct _objects_t {
     // confundir con update_* de arriba que es el WiFi/OTA de la PANTALLA)
     lv_obj_t *console_ota_led;
     lv_obj_t *console_ota_status_label;
-    lv_obj_t *console_fw_version_label;
     lv_obj_t *console_wifi_led;
     lv_obj_t *console_wifi_toggle_btn;
     lv_obj_t *sysinfo_robot_serial_value;
     lv_obj_t *sysinfo_console_serial_value;
+    lv_obj_t *sysinfo_console_fw_value;
     lv_obj_t *sysinfo_device_name_value;
     lv_obj_t *settings_btn_brightness;
     lv_obj_t *settings_btn_theme;
@@ -207,6 +207,16 @@ typedef struct _objects_t {
     lv_obj_t *bt_panel_disconnect_btn;
     lv_obj_t *bt_panel_block_btn;
     lv_obj_t *bt_panel_unblock_all_btn;
+    lv_obj_t *settings_btn_joystick;
+    lv_obj_t *settings_content_joystick;
+    lv_obj_t *j1_mode_btn_servo3;
+    lv_obj_t *j1_mode_btn_led;
+    lv_obj_t *j1_mode_btn_center;
+    lv_obj_t *j1_mode_btn_capture;
+    lv_obj_t *j2_mode_btn_servo3;
+    lv_obj_t *j2_mode_btn_led;
+    lv_obj_t *j2_mode_btn_center;
+    lv_obj_t *j2_mode_btn_capture;
     lv_obj_t *settings_wifi_ssid_value;
     lv_obj_t *tech_desc_a;
     lv_obj_t *tech_desc_b;
@@ -256,6 +266,7 @@ void create_panel_sysinfo_version_guide();
 void create_panel_settings_tecnologia();
 void create_panel_settings_camera();
 void create_panel_settings_bluetooth();
+void create_panel_settings_joystick();
 void create_panel_modes_auto_rotation();
 void create_panel_settings_srv_limits();
 // Overlay pantalla completa "Actualizando..." mostrado durante la descarga

@@ -1,0 +1,223 @@
+===================================================================
+ HARDWARE DE LA PANTALLA - JC4880P443C_I_W (WELLTEP / RD9x console)
+===================================================================
+Resumen armado a partir de la documentacion del fabricante en:
+C:\Users\USUARIO\Music\JC4880P443C_I_W
+
+Los datos marcados como "confirmado" salen del firmware de ejemplo
+compilable (mas confiable) o de texto explicito en la ficha tecnica.
+Los marcados "sin confirmar" salen de leer el esquematico (imagenes
+PNG comprimidas) y podrian tener algun error de lectura -- antes de
+usar esos pines para algo critico, conviene volver a chequear en
+JC4880P443C_I_W\5-Schematic\JC4880P443_V1.0.pdf (el esquematico
+vectorial completo, no revisado todavia porque las imagenes PNG ya
+alcanzaron para la mayoria de los datos).
+
+-------------------------------------------------------------------
+1) IDENTIFICACION DE LA PLACA
+-------------------------------------------------------------------
+Fabricante:      Shenzhen Jingcai Intelligent Co. (marca JCZN/GUITION)
+Modelo:          JC4880P443C_I_W (tactil capacitivo, sin carcasa)
+                 JC4880P443C_I_W_Y (misma placa, con carcasa)
+Modulo/SoM:      JC-ESP32P4-M3 (GUITION)
+Chip principal:  ESP32-P4 (RISC-V dual-core, hasta 400MHz, con FPU)
+Chip WiFi/BT:    ESP32-C6 aparte (el P4 no tiene radio propia, se
+                 conecta por SDIO/SPI via esp_hosted -- ya usado en
+                 este firmware)
+PSRAM:           32 MB
+Flash:           16 MB
+Tamano placa:    117.01 x 69.41 mm
+Alimentacion:    5V, ~320mA
+Temp. trabajo:   -20C a 70C
+
+-------------------------------------------------------------------
+2) PANTALLA (LCD)
+-------------------------------------------------------------------
+Panel:           4.3", TFT/IPS, 480x800, 24-bit color
+Interfaz:        MIPI-DSI, 2 carriles de datos
+Driver IC:       ST7701S (coincide con lo que ya usa este firmware)
+Conector:        FPC1, 0.5mm paso, 30 pines
+Backlight:       GPIO23 (PWM/LEDC) -- controla el boost MP3202 que
+                 alimenta el string de LEDs de fondo (confirmado)
+Reset LCD:       GPIO5 (confirmado)
+
+TACTIL (GT911):
+  Bus I2C:       I2C_NUM_1, compartido con el codec de audio
+    SDA:         GPIO7
+    SCL:         GPIO8
+  Reset tactil:  GPIO22
+  Interrupcion:  GPIO21
+  (todo esto confirmado contra firmware de ejemplo compilado del
+  fabricante para esta placa exacta)
+
+-------------------------------------------------------------------
+3) CAMARA
+-------------------------------------------------------------------
+Sensor:          OmniVision OV02C10, 2MP
+Interfaz:        MIPI-CSI, 2 carriles (NO es DVP)
+Conector:        FPC2, 0.3mm paso, 15 pines, aparte del de la
+                 pantalla ("Camera interface", item 8 del diagrama)
+Reset/Power-down: sin GPIO dedicado -- solo un pull-up de 10K en las
+                 lineas CSI_IO0/CSI_IO1; el sensor arranca solo con
+                 el power-on reset (no hace falta manejarlo por
+                 software)
+I2C de control (SCCB): CONFIRMADO -- comparte el mismo bus que
+                 tactil/audio: SDA=GPIO7, SCL=GPIO8. (El Kconfig del
+                 ejemplo trae por defecto GPIO31/34, pero el
+                 sdkconfig/sdkconfig.defaults/sdkconfig.old que
+                 vienen con el ejemplo -- los valores realmente
+                 compilados y probados por el fabricante para esta
+                 placa -- pisan ese default con GPIO7/8. Coincide
+                 ademas con los nombres de red ES_I2C_SDA/ES_I2C_SCL
+                 que aparecen en el esquematico para el conector de
+                 la camara.)
+
+Codigo de ejemplo YA INCLUIDO y reusable (esto es lo importante):
+  Carpeta: JC4880P443C_I_W\1-Demo\idf_examples\ESP-IDF\video_lcd_display\
+  Usa el framework oficial de Espressif esp_video + esp_cam_sensor.
+  El driver del sensor OV02C10 ya viene como componente instalado en:
+  JC4880P443C_I_W\1-Demo\idf_examples\ESP-IDF\video_lcd_display\
+      managed_components\espressif__esp_cam_sensor\sensors\ov02c10\
+  (esa misma carpeta de componentes tiene ademas drivers para otros
+  sensores por si algun dia cambia el modelo: ov2640, ov5640, ov5647,
+  gc0308, gc2145, sc2336, bf3a03, etc.)
+
+LECTURA DE CODIGOS QR:
+  Si, es viable y bastante mas simple que mostrar video en vivo.
+  No hace falta decodificar cada cuadro en tiempo real ni mostrar
+  nada en pantalla necesariamente -- alcanza con capturar un frame
+  cada tanto (o continuo a baja frecuencia) y pasarlo por una
+  libreria liviana de decodificacion, por ejemplo "quirc" (chiquita,
+  en C puro, pensada justo para microcontroladores). El camino tipico
+  seria: inicializar la camara con esp_cam_sensor (igual que el
+  ejemplo de video), capturar un frame en escala de grises, correrlo
+  por quirc, y si detecta un QR te devuelve el texto directo. Esto
+  pesa mucho menos en CPU/memoria que mantener un feed de video
+  continuo dibujandose en la pantalla LVGL.
+
+-------------------------------------------------------------------
+4) RS485
+-------------------------------------------------------------------
+UART usado:      UART1 del ESP32-P4
+  TX:            GPIO26
+  RX:            GPIO27
+Direccion (DE/RE): NO hace falta un GPIO aparte -- la placa tiene un
+                 circuito automático de medio-duplex (74LVC1G132 +
+                 transistor 8550) que detecta cuando el ESP32 esta
+                 transmitiendo y conmuta la linea solo. Por eso en
+                 los ejemplos de RS485 el pin RTS se deja en
+                 UART_PIN_NO_CHANGE.
+Chip transceptor: MAX485
+Proteccion:      TVS + 2 fusibles rearmables en las lineas A/B
+Conectores:
+  J5  (item 9 del diagrama):  TTL crudo -- VIN(5V)/TX1/RX1/GND
+  J4  (item 10 del diagrama): RS485 real -- A/B + 5V + GND
+
+Codigo de ejemplo ya incluido:
+  JC4880P443C_I_W\1-Demo\idf_examples\ESP-IDF\uart_echo_rs485\
+  JC4880P443C_I_W\1-Demo\idf_examples\ESP-IDF\uart_send_rs485\
+
+NOTA IMPORTANTE: este firmware (WP_P_V9_2_UP) ya usa GPIO26/27 para
+el UART hacia la CONSOLA del robot (protocolo 5A A5 [REG] [valor]) --
+revisar antes de asumir que este RS485 esta libre para otra cosa, o
+si es justamente el mismo enlace.
+
+-------------------------------------------------------------------
+5) OTROS PERIFERICOS
+-------------------------------------------------------------------
+UART0 (consola/descarga USB-serie):
+  Conector J/CN2 (item 7), tambien sirve como entrada de 5V
+  TX: GPIO37   RX: GPIO38
+
+USB:
+  Type-C Full-Speed (item 4)
+  Type-C High-Speed (item 5)
+
+Audio:
+  Codec:       ES8311 (I2C compartido GPIO7/8)
+  I2S:         DOUT=GPIO9, WS=GPIO10, BCLK=GPIO12, MCLK=GPIO13,
+               DIN=GPIO48 (para un segundo mic/codec opcional)
+  Amplificador parlante: NS4150, habilitado por GPIO11
+  Microfono:   analogico integrado (MSM381A3729H9CP)
+  Conector parlante: MX1.25 2 pines (item 2)
+
+Bateria:
+  IC:          IP5306 (carga + boost)
+  Conector:    MX1.25 2 pines (item 3)
+
+Tarjeta SD/TF:
+  Conector J1, hasta 32GB, formato FAT32
+  Alimentacion conmutada por GPIO45 (PMOS AO3401)
+  Pines de datos (GPIO39-44): confianza media, sacados de un BSP
+  generico de Espressif para placas P4, no confirmados pin a pin
+  contra el esquematico de ESTA placa especifica.
+
+Sin RTC, sin buzzer, sin LEDs ni botones fisicos de usuario (solo
+puntos de test / footprints sin poblar para BOOT/RESET de fabrica).
+
+-------------------------------------------------------------------
+6) TABLA RAPIDA DE GPIOs COMPROMETIDOS (NO USAR PARA OTRA COSA)
+-------------------------------------------------------------------
+GPIO5   LCD reset
+GPIO7   I2C compartido (tactil GT911 + audio ES8311) SDA
+GPIO8   I2C compartido SCL
+GPIO9   I2S DOUT (audio)
+GPIO10  I2S WS (audio)
+GPIO11  Enable amplificador parlante
+GPIO12  I2S BCLK (audio)
+GPIO13  I2S MCLK (audio)
+GPIO21  Tactil INT
+GPIO22  Tactil RST
+GPIO23  Backlight LCD (PWM)
+GPIO26  RS485/UART1 TX  (posible conflicto con UART a la consola,
+        ver nota arriba)
+GPIO27  RS485/UART1 RX  (idem)
+GPIO35  BOOTMODE / boton BOOT de fabrica
+GPIO37  UART0 TX (consola de descarga/depuracion)
+GPIO38  UART0 RX (idem)
+GPIO39-44  Tarjeta SD (confianza media, ver arriba)
+GPIO45  Habilita alimentacion de la tarjeta SD
+GPIO48  I2S DIN (audio, segundo canal opcional)
+
+-------------------------------------------------------------------
+7) GPIOs PROBABLEMENTE LIBRES (candidatos para usar)
+-------------------------------------------------------------------
+GPIO1, GPIO2, GPIO3, GPIO4        -- confianza alta, sin ninguna
+                                      funcion encontrada
+GPIO20, GPIO24, GPIO25            -- confianza media
+GPIO28, GPIO29, GPIO30, GPIO32,
+GPIO33                            -- confianza media-alta, salen en
+                                      el header de expansion 2x13
+GPIO46, GPIO47, GPIO49, GPIO50,
+GPIO51, GPIO52, GPIO53            -- confianza media-alta, varios
+                                      tambien en el header de
+                                      expansion
+
+Header de expansion 2x13 (2.54mm, item 6 "Expand IO", conector JP1)
+trae afuera: GPIO52, 51, 50, 49, 35, 34, 33, 31, 30, 29, GND,
+VCC3V3, y ademas UART0/boot del ESP32-C6 (para flashearlo aparte) y
+el bus I2C compartido (para colgar mas dispositivos I2C).
+
+-------------------------------------------------------------------
+8) DONDE ESTA CADA COSA EN LA CARPETA DE DOCUMENTACION
+-------------------------------------------------------------------
+JC4880P443C_I_W\
+  1-Demo\idf_examples\ESP-IDF\
+      video_lcd_display\      -> ejemplo camara + LCD (esp_cam_sensor)
+      uart_echo_rs485\        -> ejemplo RS485 (eco)
+      uart_send_rs485\        -> ejemplo RS485 (envio)
+      xiaozhi-esp32\          -> firmware completo de otro proyecto,
+                                  con el pinout mas confiable en
+                                  main\boards\guition-jc4880p443\config.h
+  2-Specification\            -> ficha tecnica + foto con leyenda de
+                                  todos los conectores numerados
+  4-Driver_IC_Data_Sheet\     -> datasheet del ESP32-P4 y del OV02C10
+  5-Schematic\                -> esquematicos por bloque (PNG) + el
+                                  esquematico vectorial completo
+                                  (JC4880P443_V1.0.pdf, sin revisar
+                                  todavia, mejor fuente si hace falta
+                                  mas precision)
+  6-User_Manual\              -> guia de arranque + foto de interfaces
+  8-Burn operation\           -> herramienta e instrucciones de flasheo
+
+===================================================================

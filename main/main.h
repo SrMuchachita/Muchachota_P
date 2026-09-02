@@ -46,11 +46,24 @@ typedef enum
     HMI_REG_RL1                 = 0x24, // HMI -> Consola: 1=enciende RL1 (coil 0x0004 del robot), 0=apaga — se manda cuando el robot entra/sale de reversa
     HMI_REG_ROBOT_MODEL         = 0x25, // Consola -> HMI: modelo del robot conectado: 0=RD80, 1=RD90, 2=RD100
     HMI_REG_RL2                 = 0x26, // HMI -> Consola: 1=enciende RL2 (coil 0x0005 del robot), 0=apaga — se manda cuando el robot entra/sale de avance
+    // BIDI: modo del boton del joystick (0=Centrar servo3, 1=LED (ciclo de
+    // intensidad), 2=Centrar cabeza/cuello + cancelar giro automatico,
+    // 3=Captura — sin accion propia todavia, solo dispara CAPTURE_EVENT). El
+    // HMI manda el valor elegido y la consola confirma de vuelta con el
+    // mismo registro (mismo patron que WIFI_STATUS: la UI espera la
+    // confirmacion, no asume el valor que mando).
+    HMI_REG_J1_BUTTON_MODE      = 0x27,
+    HMI_REG_J2_BUTTON_MODE      = 0x28,
     HMI_REG_BLUETOOTH_MAC_HI    = 0x29, // Consola -> HMI: MAC BLE del dispositivo conectado, bits[15:0]=bytes 5-4
     HMI_REG_BLUETOOTH_MAC_LO    = 0x2A, // Consola -> HMI: MAC BLE del dispositivo conectado, bytes 3-0 (llega despues de MAC_HI)
     HMI_REG_BLUETOOTH_DISCONNECT = 0x2B, // HMI -> Consola: 1=desconecta el dispositivo BLE actual y vuelve a modo emparejamiento
     HMI_REG_BLUETOOTH_BLOCK      = 0x2C, // HMI -> Consola: 1=bloquea (lista negra, max 5 MACs) y desconecta el dispositivo BLE actual
     HMI_REG_BLUETOOTH_UNBLOCK_ALL = 0x2D, // HMI -> Consola: 1=borra toda la lista negra de MACs BLE bloqueadas
+    // Consola -> HMI: el usuario presiono el boton del joystick estando en
+    // modo Captura (HMI_REG_J1/J2_BUTTON_MODE == 3). Sin accion propia
+    // definida todavia del lado del HMI.
+    HMI_REG_J1_CAPTURE_EVENT    = 0x2E,
+    HMI_REG_J2_CAPTURE_EVENT    = 0x2F,
     HMI_CMD_MAX
 } hmi_reg_t;
 
@@ -58,6 +71,8 @@ typedef enum
   Para que otros archivos tengan acceso*/
 void hmi_send_data(uint8_t reg, int32_t value);
 void lcd_set_brightness(int brightness_percent);
+void buzzer_nav_beep(void);
+void buzzer_sound_3(void);
 void hmi_deactivate_dynamic_nav(void);
 void hmi_open_device_name_editor(void);
 void hmi_open_wifi_editor(void);

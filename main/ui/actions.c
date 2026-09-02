@@ -21,6 +21,7 @@ void action_robot_brightness_changed(lv_event_t *e) {
     // a 200ms
     if (lv_tick_elaps(start_time) > 100){
         start_time = lv_tick_get();
+        buzzer_sound_3();
         // Envio de datos a la consola
         hmi_send_data(HMI_REG_ROBOT_LED_CHANGED, value_pwm);
     }
@@ -638,7 +639,7 @@ void action_sysinfo_btn_update(lv_event_t *e) {
 /* ---- Settings navigation ---- */
 
 static void settings_set_nav_active(lv_obj_t *active_btn) {
-    lv_obj_t *btns[10] = {
+    lv_obj_t *btns[11] = {
         objects.settings_btn_brightness,
         objects.settings_btn_theme,
         objects.settings_btn_battery,
@@ -648,14 +649,15 @@ static void settings_set_nav_active(lv_obj_t *active_btn) {
         objects.settings_btn_tecnologia,
         objects.settings_btn_camera,
         objects.settings_btn_srv_limits,
-        objects.settings_btn_bluetooth
+        objects.settings_btn_bluetooth,
+        objects.settings_btn_joystick
     };
-    for (int i = 0; i < 10; i++)
+    for (int i = 0; i < 11; i++)
         apply_btn_style(btns[i], btns[i] == active_btn);
 }
 
 static void settings_show_panel(lv_obj_t *panel) {
-    lv_obj_t *panels[10] = {
+    lv_obj_t *panels[11] = {
         objects.settings_content_brightness,
         objects.settings_content_theme,
         objects.settings_content_battery,
@@ -665,9 +667,10 @@ static void settings_show_panel(lv_obj_t *panel) {
         objects.settings_content_tecnologia,
         objects.settings_content_camera,
         objects.settings_content_srv_limits,
-        objects.settings_content_bluetooth
+        objects.settings_content_bluetooth,
+        objects.settings_content_joystick
     };
-    for (int i = 0; i < 10; i++) {
+    for (int i = 0; i < 11; i++) {
         if (!panels[i]) continue;
         if (panels[i] == panel)
             lv_obj_remove_flag(panels[i], LV_OBJ_FLAG_HIDDEN);
@@ -734,6 +737,12 @@ void action_settings_btn_bluetooth(lv_event_t *e) {
     g_settings_active_nav = objects.settings_btn_bluetooth;
     settings_set_nav_active(objects.settings_btn_bluetooth);
     settings_show_panel(objects.settings_content_bluetooth);
+}
+
+void action_settings_btn_joystick(lv_event_t *e) {
+    g_settings_active_nav = objects.settings_btn_joystick;
+    settings_set_nav_active(objects.settings_btn_joystick);
+    settings_show_panel(objects.settings_content_joystick);
 }
 
 void action_settings_bluetooth_disconnect(lv_event_t *e) {
