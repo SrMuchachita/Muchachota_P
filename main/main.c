@@ -67,7 +67,7 @@ LV_FONT_DECLARE(lv_font_distance);
 
 
 //******************************************** SERIAL NUMBER ****************************************************************** */
-#define SERIAL_NUMBER     "260007" // 6CARACTERES
+#define SERIAL_NUMBER     "260008" // 6CARACTERES
 
 //******************************************** VERSION INFO ****************************************************************** */
 // FW_VERSION ya NO es un define fijo — se lee en runtime de
