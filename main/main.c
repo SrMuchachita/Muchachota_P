@@ -129,7 +129,10 @@ LV_FONT_DECLARE(lv_font_distance);
 // Pinout UART-HMI — fijo, GPIO 51/52 (RS-485, conector J4). Ya no
 // seleccionable en runtime (antes tambien podia ser GPIO 26/27, conector J5).
 #define HMI_UART_PORT     UART_NUM_1
-#define UART_BUFFER_SIZE  (512)
+// Ring buffer del driver UART (RX y TX). A 115200 baud 512 bytes se llenaban
+// en ~45 ms si la tarea de RX se demoraba; 4096 da ~360 ms de margen antes de
+// que el driver empiece a descartar bytes (y se pierdan PONGs de la consola).
+#define UART_BUFFER_SIZE  (4096)
 #define HMI_UART_TXD      (51) // TXD via MAX485 -> J4 RS-485
 #define HMI_UART_RXD      (52) // RXD via MAX485 -> J4 RS-485
 #define HMI_UART_BAUD     (115200)
@@ -192,6 +195,7 @@ void hmi_reapply_cached_boot_regs(void);
 static inline uint8_t battery_percent(uint16_t mv);
 static uint32_t hmi_get_boot_count(void);
 static void     hmi_log_refresh(void);
+static void     hmi_log_ex(log_type_t type, const char *msg, int32_t lv_lock_timeout_ms);
 static void     hmi_conn_indicator_create(void);
 static void     panels_startup_init(void);
 
@@ -200,6 +204,7 @@ static void     panels_startup_init(void);
 void vTaskUartHmiEvents(void *pvParameters);
 void vTaskHmiRxProcess(void *pvParameters);
 void vTaskHmiTransmit(void *pvParameters);
+void vTaskHmiPing(void *pvParameters);
 #ifdef TEST_BATTERY_VOLTAGE
 void vTaskBatterySimTest(void *pvParameters);
 #endif
@@ -258,6 +263,7 @@ static QueueHandle_t xQueueUartEvent = NULL;
 
 //************************************** VARIABLES GLOBALES ****************************************************/
 uint8_t g_bat_display_percent = 0; // 0=voltaje, 1=porcentaje
+uint8_t g_battery_alert_enabled = 1; // 1=alerta de bateria critica habilitada (default)
 #define SERIAL_NUM_LEN  6
 static char s_serial_num[SERIAL_NUM_LEN + 1] = SERIAL_NUMBER;
 
@@ -280,6 +286,10 @@ esp_lcd_dsi_bus_handle_t mipi_dsi_bus = NULL;
 esp_lcd_panel_io_handle_t mipi_dbi_io = NULL;
 // TACTIL
 esp_lcd_touch_handle_t tp_touch_handle = NULL;
+static lv_indev_t *g_touch_indev = NULL; // indev LVGL del tactil (para multitouch)
+// Ultimo envio de HMI_REG_ANGLE_HEAD/NECK_CHANGED ([0] cabeza, [1] cuello).
+// Ver hmi_sync_servo_angle_from_console().
+static volatile TickType_t s_angle_tx_tick[2] = { 0, 0 };
 // Numero de buffers que te retorna la interfaz
 uint8_t num_fbs;
 
@@ -737,6 +747,7 @@ void app_main(void)
     esp_lv_adapter_touch_config_t touch_cfg = ESP_LV_ADAPTER_TOUCH_DEFAULT_CONFIG(disp, tp_touch_handle);
     lv_indev_t *touch = esp_lv_adapter_register_touch(&touch_cfg);
     assert(touch != NULL);
+    g_touch_indev = touch;
     lv_indev_add_event_cb(touch, touch_click_sound_cb, LV_EVENT_PRESSED, NULL);
     // Fondo negro antes de arrancar el task de render: el primer frame pintado ya es negro
     lv_obj_set_style_bg_color(lv_scr_act(), lv_color_black(), LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -860,6 +871,9 @@ void app_main(void)
     xTaskCreate(vTaskHmiTransmit,   "HMI Tx",    TASK_SIZE, NULL, 5, NULL);
     xTaskCreate(vTaskUartHmiEvents, "HMI Event", TASK_SIZE, NULL, 5, NULL);
     xTaskCreate(vTaskHmiRxProcess,  "HMI Rx",   TASK_SIZE, NULL, 6, NULL);
+    // PING a la consola en su propia tarea (no toca LVGL ni procesa frames):
+    // se crea despues de xQueueHmiTx, que es por donde sale el PING.
+    xTaskCreate(vTaskHmiPing,       "HMI Ping", TASK_SIZE, NULL, 6, NULL);
 
     // ui_init() construye toda la interfaz (base + paneles ocultos) en un
     // solo pase, dentro de este unico lock. Ver el comentario en ui_init()
@@ -877,6 +891,10 @@ void app_main(void)
         camera_rl1_mode_wire();
         joystick_mode_wire();
         wifi_settings_ui_init();
+        // Ajustes > Camara solo aplica al RD100 (unico modelo con camara de
+        // reversa) — arranca oculto hasta que apply_robot_model() confirme
+        // el modelo real (ver mas abajo, HMI_REG_ROBOT_MODEL).
+        if (objects.settings_btn_camera) lv_obj_add_flag(objects.settings_btn_camera, LV_OBJ_FLAG_HIDDEN);
         esp_lv_adapter_unlock();
     }
     esp_lv_adapter_refresh_now(disp);
@@ -954,20 +972,17 @@ void app_main(void)
                 lv_label_set_text(objects.sysinfo_console_serial_value, sn_short);
         }
 
-        /*SET VERSION INFO — panel: child(0)=titulo, child(1)=Firmware,
-          child(2)=Firmware WC (consola, se llena aparte por apply_fw_version()
-          cuando llega/reaparece el registro), child(3..7)=resto de filas,
-          cada fila child(1)=valor*/
+        /*SET VERSION INFO — panel: child(0)=titulo, child(1..6)=filas, cada fila child(1)=valor*/
         {
             lv_obj_t *panel = objects.sysinfo_content_version;
             if (panel) {
                 lv_obj_t *row;
                 row = lv_obj_get_child(panel, 1); if (row) lv_label_set_text(lv_obj_get_child(row, 1), esp_app_get_description()->version);
-                row = lv_obj_get_child(panel, 3); if (row) lv_label_set_text(lv_obj_get_child(row, 1), HW_REVISION);
-                row = lv_obj_get_child(panel, 4); if (row) lv_label_set_text(lv_obj_get_child(row, 1), LVGL_VERSION_STR);
-                row = lv_obj_get_child(panel, 5); if (row) lv_label_set_text(lv_obj_get_child(row, 1), ESPIDF_VERSION);
-                row = lv_obj_get_child(panel, 6); if (row) lv_label_set_text(lv_obj_get_child(row, 1), BUILD_DATE);
-                row = lv_obj_get_child(panel, 7);
+                row = lv_obj_get_child(panel, 2); if (row) lv_label_set_text(lv_obj_get_child(row, 1), HW_REVISION);
+                row = lv_obj_get_child(panel, 3); if (row) lv_label_set_text(lv_obj_get_child(row, 1), LVGL_VERSION_STR);
+                row = lv_obj_get_child(panel, 4); if (row) lv_label_set_text(lv_obj_get_child(row, 1), ESPIDF_VERSION);
+                row = lv_obj_get_child(panel, 5); if (row) lv_label_set_text(lv_obj_get_child(row, 1), BUILD_DATE);
+                row = lv_obj_get_child(panel, 6);
                 if (row) {
                     char bc_buff[12];
                     snprintf(bc_buff, sizeof(bc_buff), "%lu", hmi_get_boot_count());
@@ -1092,24 +1107,30 @@ void vTaskHmiRxProcess(void *pvParameters)
             hmi_process_buffer(rx_frame.buffer, rx_frame.len);
         }
 
-#ifdef TEST_UART_RX_DISPLAY
-        {
-            static uint32_t last_ping_ms = 0;
-            uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
-            if (now_ms < 5000) goto skip_ping;  // esperar 5s al boot para que la consola arranque
-            if ((now_ms - last_ping_ms) >= 400) {
-                last_ping_ms = now_ms;
-                hmi_send_data(HMI_REG_PING, 1);
-                hmi_log(LOG_TX, ">> PING");
-#ifdef DEV_MODE
-                dev_serial_add("TX", "PING");
-#endif
-            }
-            skip_ping:;
-        }
-#endif
+        // El PING ya no sale de aca: lo manda vTaskHmiPing() (esta tarea
+        // puede quedar trabada esperando el lock de LVGL).
 
         vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+
+// PING a la consola cada 400 ms, en una tarea propia que NO procesa frames
+// ni espera el lock de LVGL: si LVGL esta ocupado (render grande, cambio de
+// pantalla, animacion) el PING sigue saliendo igual y la consola no cree que
+// el HMI murio (a los 7 s sin PING hace esp_restart() y pierde el encoder).
+// El ">> PING" del panel de logs se agrega sin esperar: si LVGL esta ocupado
+// en ese momento, la linea queda guardada y aparece en el proximo refresco.
+void vTaskHmiPing(void *pvParameters)
+{
+    (void)pvParameters;
+    vTaskDelay(pdMS_TO_TICKS(5000)); // esperar 5 s al boot para que la consola arranque
+    while (1) {
+        hmi_send_data(HMI_REG_PING, 1);
+        hmi_log_ex(LOG_TX, ">> PING", 0);
+#ifdef DEV_MODE
+        dev_serial_add("TX", "PING");
+#endif
+        vTaskDelay(pdMS_TO_TICKS(400));
     }
 }
 
@@ -1440,6 +1461,7 @@ typedef enum {
     MODES_VIEW_CONTROL_PUNTOS,
     MODES_VIEW_AUTOROT_PICKER,
     MODES_VIEW_AUTOROT_EDITOR,
+    MODES_VIEW_CONTROL_DIGITAL,
 } modes_view_t;
 
 typedef enum {
@@ -1459,6 +1481,8 @@ static int32_t   g_move_target_head = 90, g_move_target_neck = 90;
 static int32_t   g_move_step_deg    = 2;
 static lv_timer_t *g_auto_rotation_timer = NULL;
 
+static bool demo_is_running(void);              // Demo de MODES, ver hmi_demo_start()
+static void demo_set_running_style(bool running);
 static void auto_rotation_editor_refresh_list(void);
 static void auto_rotation_editor_refresh_row_colors(void);
 static void ar_test_set_running(bool running);
@@ -1475,8 +1499,9 @@ static void modes_show_view(modes_view_t view)
         if (view == MODES_VIEW_HOME) lv_obj_remove_flag(objects.modes_grid_panel, LV_OBJ_FLAG_HIDDEN);
         else                          lv_obj_add_flag(objects.modes_grid_panel, LV_OBJ_FLAG_HIDDEN);
     }
-    lv_obj_t *sub_objs[3] = { objects.modes_control_puntos_panel, objects.modes_autorot_picker_panel, objects.modes_autorot_editor_panel };
-    for (int i = 0; i < 3; i++) {
+    lv_obj_t *sub_objs[4] = { objects.modes_control_puntos_panel, objects.modes_autorot_picker_panel,
+                              objects.modes_autorot_editor_panel, objects.modes_control_digital_panel };
+    for (int i = 0; i < 4; i++) {
         if (!sub_objs[i]) continue;
         bool show = (view == (modes_view_t)(i + 1));
         if (show) lv_obj_remove_flag(sub_objs[i], LV_OBJ_FLAG_HIDDEN);
@@ -1505,6 +1530,12 @@ static void auto_rotation_sync_labels(int32_t head, int32_t neck)
     if (objects.ar_angle_head_label) lv_label_set_text(objects.ar_angle_head_label, buff_deg);
     lv_snprintf(buff_deg, sizeof(buff_deg), "%03d\xC2\xB0", (int)neck);
     if (objects.ar_angle_neck_label) lv_label_set_text(objects.ar_angle_neck_label, buff_deg);
+    // Control Digital: mismos angulos, con el caption traducido.
+    char cd_buf[40];
+    lv_snprintf(cd_buf, sizeof(cd_buf), "%s: %03d\xC2\xB0", g_lang->cd_lbl_head, (int)head);
+    if (objects.cd_head_label) lv_label_set_text(objects.cd_head_label, cd_buf);
+    lv_snprintf(cd_buf, sizeof(cd_buf), "%s: %03d\xC2\xB0", g_lang->cd_lbl_neck, (int)neck);
+    if (objects.cd_neck_label) lv_label_set_text(objects.cd_neck_label, cd_buf);
 }
 
 // Cambia el texto del boton "Iniciar Giro Automatico"/"Pausar"/"Reanudar" Y
@@ -1526,6 +1557,7 @@ void hmi_modes_giro_retheme(void)
                    g_play_state == AUTO_PLAY_PLAYING ||
                    g_play_state == AUTO_PLAY_PAUSED);
     hmi_style_btn(objects.btn_giro_automatico, active);
+    if (demo_is_running()) demo_set_running_style(true);
 }
 
 // Usada solo por los callbacks ar_angle_*_dec/inc_cb del editor de puntos
@@ -1648,6 +1680,7 @@ static void auto_rotation_ensure_timer(void)
 
 static void auto_rotation_start_one_shot_move(int32_t target_head, int32_t target_neck)
 {
+    if (demo_is_running()) return; // la Demo esta moviendo cabeza/cuello
     auto_rotation_ensure_timer();
     g_play_state = AUTO_PLAY_ONE_SHOT_MOVE;
     g_move_target_head = target_head;
@@ -1659,6 +1692,7 @@ static void auto_rotation_start_one_shot_move(int32_t target_head, int32_t targe
 
 static void hmi_auto_rotation_play_start(void)
 {
+    if (demo_is_running()) return; // la Demo esta moviendo cabeza/cuello
     if (g_selected_recorrido < 0) return;
     recorrido_t *r = &g_recorridos[g_selected_recorrido];
     if (r->count == 0) return;
@@ -1678,6 +1712,150 @@ static void hmi_auto_rotation_play_start(void)
         auto_rotation_editor_refresh_row_colors();
     }
     ar_test_set_running(true);
+}
+
+// ---- MODES: Demo (INICIAR DEMO / DETENER DEMO) ----
+// La secuencia la arma el propio HMI (antes solo mandaba HMI_REG_START_DEMO y
+// la consola hacia su demo): cabeza y cuello a 90, LED sube 0->100% y baja
+// a 0, cabeza 90->0->180->90, despues cuello 90->0->180->90. Cada
+// paso interpola con ease-in-out
+// (arranca y frena suave) y solo manda el registro cuando el valor entero
+// cambia. Los angulos se recortan a los Limites de Servo. DETENER DEMO corta
+// donde este (no vuelve al centro).
+typedef enum { DEMO_LED = 0, DEMO_HEAD, DEMO_NECK } demo_axis_t;
+typedef struct {
+    demo_axis_t axis;
+    int32_t     target;      // % para el LED, grados para cabeza/cuello
+    uint16_t    ms_per_unit; // duracion = |distancia| * ms_per_unit
+} demo_step_t;
+
+static const demo_step_t k_demo_steps[] = {
+    { DEMO_HEAD,  90, 10 }, // posicion inicial: cabeza a 90 desde donde este
+    { DEMO_NECK,  90, 10 }, // y cuello a 90
+    { DEMO_LED,    0,  3 }, // LED a 0 rapido, para arrancar siempre desde apagado
+    { DEMO_LED,  100, 15 }, // LED se prende de a poco (0->100% en 1.5 s)
+    { DEMO_LED,    0, 15 }, // y baja la intensidad
+    { DEMO_HEAD,   0, 17 }, // cabeza 90->0
+    { DEMO_HEAD, 180, 17 }, // cabeza 0->180 (~3 s)
+    { DEMO_HEAD,  90, 17 }, // cabeza vuelve a 90 antes de mover el cuello
+    { DEMO_NECK,   0, 17 }, // cuello 90->0
+    { DEMO_NECK, 180, 17 }, // cuello 0->180
+    { DEMO_NECK,  90, 17 }, // cuello vuelve a 90
+};
+#define DEMO_STEP_COUNT ((int)(sizeof(k_demo_steps) / sizeof(k_demo_steps[0])))
+#define DEMO_TICK_MS    20
+
+static lv_timer_t *s_demo_timer = NULL;
+static int      s_demo_step = -1; // -1 = la demo no esta corriendo
+static uint32_t s_demo_t0, s_demo_dur;
+static int32_t  s_demo_from, s_demo_to, s_demo_last;
+
+static bool demo_is_running(void) { return s_demo_step >= 0; }
+
+static int32_t demo_current(demo_axis_t axis)
+{
+    switch (axis) {
+    case DEMO_LED:  return objects.obj16 ? lv_slider_get_value(objects.obj16) : 0;
+    case DEMO_HEAD: return get_var_angle_head_value();
+    default:        return get_var_angle_neck_value();
+    }
+}
+
+static void demo_apply(demo_axis_t axis, int32_t v)
+{
+    if (axis == DEMO_LED) {
+        if (objects.obj16) lv_slider_set_value(objects.obj16, v, LV_ANIM_OFF);
+        char buff[10];
+        lv_snprintf(buff, sizeof(buff), "%d %%", (int)v);
+        set_var_brightness(buff);
+        if (objects.brightness_label) lv_label_set_text_static(objects.brightness_label, get_var_brightness());
+        hmi_bigview_led_level_refresh();
+        hmi_send_data(HMI_REG_ROBOT_LED_CHANGED, (v * 1023 + 50) / 100);
+        return;
+    }
+    if (axis == DEMO_HEAD) {
+        set_var_angle_head_value(v);
+        hmi_send_data(HMI_REG_ANGLE_HEAD_CHANGED, v);
+    } else {
+        set_var_angle_neck_value(v);
+        hmi_send_data(HMI_REG_ANGLE_NECK_CHANGED, v);
+    }
+    auto_rotation_sync_labels(get_var_angle_head_value(), get_var_angle_neck_value());
+}
+
+static void demo_set_running_style(bool running)
+{
+    lv_obj_t *btn = objects.btn_start_demo;
+    hmi_style_btn(btn, running);
+    if (running || !btn) return;
+    // hmi_style_btn(false) lo deja gris "inactivo"; este boton en reposo es
+    // una tarjeta de la grilla de MODES (fondo/borde de tarjeta, texto accent).
+    lv_obj_set_style_bg_color(btn, hmi_theme_bg_card(), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_color(btn, hmi_theme_bd_card(), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_t *lbl = lv_obj_get_child(btn, 0);
+    if (lbl) {
+        lv_obj_set_style_text_color(lbl, hmi_theme_accent(), LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_text_color(lbl, hmi_theme_accent(), LV_PART_MAIN | LV_STATE_PRESSED);
+    }
+}
+
+static void demo_finish(void)
+{
+    s_demo_step = -1;
+    if (s_demo_timer) lv_timer_pause(s_demo_timer);
+    demo_set_running_style(false);
+}
+
+static void demo_begin_step(int idx)
+{
+    if (idx >= DEMO_STEP_COUNT) { demo_finish(); return; }
+    const demo_step_t *s = &k_demo_steps[idx];
+    int32_t to = s->target;
+    if (s->axis != DEMO_LED) {
+        servo_limit_t lim = (s->axis == DEMO_HEAD) ? g_srv_limits.srv1 : g_srv_limits.srv2;
+        if (to < lim.min) to = lim.min;
+        if (to > lim.max) to = lim.max;
+    }
+    s_demo_step = idx;
+    s_demo_from = s_demo_last = demo_current(s->axis);
+    s_demo_to   = to;
+    int32_t dist = (to > s_demo_from) ? to - s_demo_from : s_demo_from - to;
+    s_demo_dur  = (uint32_t)dist * s->ms_per_unit;
+    s_demo_t0   = lv_tick_get();
+}
+
+static void demo_timer_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (!demo_is_running()) return;
+    demo_axis_t axis = k_demo_steps[s_demo_step].axis;
+    uint32_t el = lv_tick_elaps(s_demo_t0);
+    int32_t v = s_demo_to;
+    if (el < s_demo_dur) {
+        float p = (float)el / (float)s_demo_dur;
+        float e = p * p * (3.0f - 2.0f * p); // smoothstep: arranca y frena suave
+        v = s_demo_from + (int32_t)lroundf((float)(s_demo_to - s_demo_from) * e);
+    }
+    if (v != s_demo_last) {
+        demo_apply(axis, v);
+        s_demo_last = v;
+    }
+    if (el >= s_demo_dur) demo_begin_step(s_demo_step + 1);
+}
+
+void hmi_demo_start(void)
+{
+    // No pisar un Giro Automatico / Test / movimiento al centro en curso.
+    if (demo_is_running() || g_play_state != AUTO_PLAY_IDLE) return;
+    if (!s_demo_timer) s_demo_timer = lv_timer_create(demo_timer_cb, DEMO_TICK_MS, NULL);
+    demo_begin_step(0);
+    lv_timer_resume(s_demo_timer);
+    demo_set_running_style(true);
+}
+
+void hmi_demo_stop(void)
+{
+    if (demo_is_running()) demo_finish();
 }
 
 // ---- MODES: grilla principal ----
@@ -1763,6 +1941,448 @@ void cp_btn_guardar_centrado_cb(lv_event_t *e)
 }
 
 void cp_btn_volver_cb(lv_event_t *e) { (void)e; modes_show_view(MODES_VIEW_HOME); }
+
+// ---- Multitouch (GT911, hasta CONFIG_ESP_LCD_TOUCH_MAX_POINTS dedos) ----
+// LVGL solo usa UN dedo (el puntero). Para que Control Digital pueda mover
+// los dos joysticks a la vez se leen todos los dedos que el driver GT911
+// guarda en tp->data (lo refresca el indev de LVGL en cada lectura, en este
+// mismo task) y se les aplica la misma transformacion que recibe el puntero
+// de LVGL: espejo/intercambio de esp_lcd_touch y luego la rotacion de la
+// pantalla (lv_display_rotate_point). El simulador no tiene multitouch: alli
+// hmi_touch_multi_supported() devuelve false y Control Digital usa los
+// eventos normales de LVGL.
+bool hmi_touch_multi_supported(void)
+{
+    return tp_touch_handle != NULL && g_touch_indev != NULL;
+}
+uint8_t hmi_touch_get_points(lv_point_t *pts, uint8_t max)
+{
+    if (!hmi_touch_multi_supported() || !pts || max == 0) return 0;
+    // Sin dedo segun LVGL = sin dedos (evita quedarse con datos viejos).
+    if (lv_indev_get_state(g_touch_indev) != LV_INDEV_STATE_PRESSED) return 0;
+
+    esp_lcd_touch_handle_t tp = tp_touch_handle;
+    uint16_t xs[CONFIG_ESP_LCD_TOUCH_MAX_POINTS], ys[CONFIG_ESP_LCD_TOUCH_MAX_POINTS];
+    uint8_t n;
+    portENTER_CRITICAL(&tp->data.lock);
+    n = tp->data.points;
+    if (n > CONFIG_ESP_LCD_TOUCH_MAX_POINTS) n = CONFIG_ESP_LCD_TOUCH_MAX_POINTS;
+    for (uint8_t i = 0; i < n; i++) {
+        xs[i] = tp->data.coords[i].x;
+        ys[i] = tp->data.coords[i].y;
+    }
+    portEXIT_CRITICAL(&tp->data.lock);
+
+    if (n > max) n = max;
+    lv_display_t *disp = lv_indev_get_display(g_touch_indev);
+    for (uint8_t i = 0; i < n; i++) {
+        uint16_t x = xs[i], y = ys[i];
+        // Mismo orden que esp_lcd_touch_get_data(): espejos y luego swap.
+        if (tp->config.flags.mirror_x && tp->set_mirror_x == NULL) x = tp->config.x_max - x;
+        if (tp->config.flags.mirror_y && tp->set_mirror_y == NULL) y = tp->config.y_max - y;
+        if (tp->config.flags.swap_xy  && tp->set_swap_xy  == NULL) { uint16_t t = x; x = y; y = t; }
+        pts[i].x = x;
+        pts[i].y = y;
+        if (disp) lv_display_rotate_point(disp, &pts[i]);
+    }
+    return n;
+}
+
+// ---- MODES: Control Digital (joystick tactil de cabeza/cuello) ----
+// Joystick de servos a UNA sola velocidad (CD_SERVO_DEG_PER_S, la misma que
+// el joystick fisico de la consola: 1 grado cada 50 ms): empujar hacia un
+// lado mueve el servo siempre igual de rapido, sin importar cuanto. Cada eje
+// necesita un empuje claro (CD_SERVO_AXIS_MIN del radio) para que un desvio
+// chico del dedo no mueva el otro servo. Arriba/abajo = cabeza, izq/der =
+// cuello (mismo mapeo que las flechas del simulador). Al soltar, la perilla
+// vuelve al centro y el servo queda donde llego. Respeta los Limites de
+// Servo (y 0-180) y no hace nada mientras corren la Demo, el Giro
+// Automatico o un movimiento al centro, para no pisarse.
+#define CD_TICK_MS         30
+#define CD_SERVO_DEG_PER_S 20.0f  // velocidad unica de cabeza/cuello
+#define CD_SERVO_AXIS_MIN  0.35f  // fraccion del radio para que un eje se mueva
+#define CD_DEADZONE        0.12f  // zona muerta del joystick del motor
+
+static lv_timer_t *s_cd_timer = NULL;
+static bool  s_cd_active = false;
+static float s_cd_x = 0.0f, s_cd_y = 0.0f; // -1..1, y positivo = arriba
+static float s_cd_head_f = 90.0f, s_cd_neck_f = 90.0f;
+
+static float cd_axis_speed(float v)
+{
+    if (fabsf(v) < CD_SERVO_AXIS_MIN) return 0.0f;
+    return (v < 0.0f) ? -CD_SERVO_DEG_PER_S : CD_SERVO_DEG_PER_S;
+}
+
+static float cd_clamp(float v, servo_limit_t lim)
+{
+    float lo = (lim.min > 0)   ? (float)lim.min : 0.0f;
+    float hi = (lim.max < 180) ? (float)lim.max : 180.0f;
+    if (v < lo) v = lo;
+    if (v > hi) v = hi;
+    return v;
+}
+
+static void cd_timer_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (!s_cd_active) return;
+    const float dt = CD_TICK_MS / 1000.0f;
+    s_cd_head_f = cd_clamp(s_cd_head_f + cd_axis_speed(s_cd_y) * dt, g_srv_limits.srv1);
+    s_cd_neck_f = cd_clamp(s_cd_neck_f + cd_axis_speed(s_cd_x) * dt, g_srv_limits.srv2);
+    int32_t head = (int32_t)lroundf(s_cd_head_f);
+    int32_t neck = (int32_t)lroundf(s_cd_neck_f);
+    bool changed = false;
+    if (head != get_var_angle_head_value()) {
+        set_var_angle_head_value(head);
+        hmi_send_data(HMI_REG_ANGLE_HEAD_CHANGED, head);
+        changed = true;
+    }
+    if (neck != get_var_angle_neck_value()) {
+        set_var_angle_neck_value(neck);
+        hmi_send_data(HMI_REG_ANGLE_NECK_CHANGED, neck);
+        changed = true;
+    }
+    if (changed) auto_rotation_sync_labels(head, neck);
+}
+
+static void cd_release(void)
+{
+    s_cd_active = false;
+    s_cd_x = s_cd_y = 0.0f;
+    if (s_cd_timer) lv_timer_pause(s_cd_timer);
+    if (objects.cd_joy_knob) lv_obj_align(objects.cd_joy_knob, LV_ALIGN_CENTER, 0, 0);
+}
+
+// Mueve la perilla bajo el dedo (recortada al circulo) y devuelve la
+// posicion normalizada -1..1 (y positivo = arriba). Sirve para los dos
+// joysticks (motor y cabeza/cuello).
+static void cd_track_at(lv_obj_t *base, lv_obj_t *knob, lv_point_t p, float *out_x, float *out_y)
+{
+    *out_x = *out_y = 0.0f;
+    if (!base || !knob) return;
+    lv_area_t a;
+    lv_obj_get_coords(base, &a);
+    float dx = (float)(p.x - (a.x1 + a.x2) / 2);
+    float dy = (float)(p.y - (a.y1 + a.y2) / 2);
+    float r = (float)(lv_obj_get_width(base) - lv_obj_get_width(knob)) / 2.0f
+              - (float)lv_obj_get_style_border_width(base, LV_PART_MAIN);
+    if (r < 1.0f) r = 1.0f;
+    float len = sqrtf(dx * dx + dy * dy);
+    if (len > r) { dx = dx * r / len; dy = dy * r / len; }
+    lv_obj_align(knob, LV_ALIGN_CENTER, (int32_t)dx, (int32_t)dy);
+    *out_x = dx / r;
+    *out_y = -dy / r;
+}
+
+// Igual que cd_track_at() pero con el punto del puntero de LVGL (un dedo).
+static void cd_track(lv_obj_t *base, lv_obj_t *knob, float *out_x, float *out_y)
+{
+    *out_x = *out_y = 0.0f;
+    lv_indev_t *indev = lv_indev_active();
+    if (!indev) return;
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);
+    cd_track_at(base, knob, p, out_x, out_y);
+}
+
+static void cd_track_point(lv_obj_t *base) { cd_track(base, objects.cd_joy_knob, &s_cd_x, &s_cd_y); }
+
+void cd_joystick_event_cb(lv_event_t *e)
+{
+    // Con multitouch los dos joysticks los maneja cd_mt_timer_cb().
+    if (hmi_touch_multi_supported()) return;
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_obj_t *base = lv_event_get_target(e);
+    switch (code) {
+    case LV_EVENT_PRESSED:
+        if (demo_is_running() || g_play_state != AUTO_PLAY_IDLE) return;
+        s_cd_head_f = (float)get_var_angle_head_value();
+        s_cd_neck_f = (float)get_var_angle_neck_value();
+        s_cd_active = true;
+        if (!s_cd_timer) s_cd_timer = lv_timer_create(cd_timer_cb, CD_TICK_MS, NULL);
+        lv_timer_resume(s_cd_timer);
+        cd_track_point(base);
+        break;
+    case LV_EVENT_PRESSING:
+        if (s_cd_active) cd_track_point(base);
+        break;
+    case LV_EVENT_RELEASED:
+    case LV_EVENT_PRESS_LOST:
+        cd_release();
+        break;
+    default:
+        break;
+    }
+}
+
+// Joystick MOTOR: mismo criterio que el joystick 1 de la consola — el eje
+// dominante decide la direccion (adelante/atras/derecha/izquierda) y la
+// distancia al centro la velocidad (0-1000). OJO: en la consola, un
+// HMI_REG_MOTOR con cmd != STOP le quita el control al joystick fisico hasta
+// recibir STOP, y NO tiene tiempo limite. Por eso STOP se manda siempre al
+// soltar, al perder el toque y al salir de la pantalla, y mientras se
+// mantiene apretado el comando se reenvia cada CD_MOTOR_RESEND_MS (sirve si
+// mas adelante la consola agrega un tiempo limite).
+enum { CD_MOTOR_STOP = 0, CD_MOTOR_FORWARD, CD_MOTOR_REVERSE, CD_MOTOR_RIGHT, CD_MOTOR_LEFT };
+#define CD_MOTOR_RESEND_MS 200
+#define CD_MOTOR_VEL_STEP  50 // velocidad en pasos de 50: no mandar un mensaje por cada pixel
+
+static lv_timer_t *s_cd_motor_timer = NULL;
+static bool    s_cd_motor_engaged = false; // el dedo esta en el joystick del motor
+static int32_t s_cd_motor_cmd = CD_MOTOR_STOP, s_cd_motor_vel = 0;
+
+void hmi_control_digital_motor_label_refresh(void)
+{
+    if (!objects.cd_motor_label) return;
+    int c = (s_cd_motor_cmd >= CD_MOTOR_STOP && s_cd_motor_cmd <= CD_MOTOR_LEFT) ? s_cd_motor_cmd : CD_MOTOR_STOP;
+    char buf[48];
+    if (c == CD_MOTOR_STOP)
+        lv_snprintf(buf, sizeof(buf), "%s: %s", g_lang->cd_caption_motor, g_lang->cd_motor_dir[0]);
+    else
+        lv_snprintf(buf, sizeof(buf), "%s: %s %d%%", g_lang->cd_caption_motor, g_lang->cd_motor_dir[c], (int)(s_cd_motor_vel / 10));
+    lv_label_set_text(objects.cd_motor_label, buf);
+}
+
+static void cd_motor_send(void)
+{
+    hmi_send_data(HMI_REG_MOTOR, (s_cd_motor_cmd << 16) | (s_cd_motor_vel & 0xFFFF));
+}
+
+static void cd_motor_set(int32_t cmd, int32_t vel)
+{
+    if (cmd == s_cd_motor_cmd && vel == s_cd_motor_vel) return;
+    s_cd_motor_cmd = cmd;
+    s_cd_motor_vel = vel;
+    cd_motor_send();
+    hmi_control_digital_motor_label_refresh();
+}
+
+static void cd_motor_resend_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (s_cd_motor_engaged && s_cd_motor_cmd != CD_MOTOR_STOP) cd_motor_send();
+}
+
+static void cd_motor_from_xy(float x, float y)
+{
+    float ax = fabsf(x), ay = fabsf(y);
+    float a = (ay >= ax) ? ay : ax;
+    if (a < CD_DEADZONE) { cd_motor_set(CD_MOTOR_STOP, 0); return; }
+    float frac = (a - CD_DEADZONE) / (1.0f - CD_DEADZONE);
+    int32_t vel = (int32_t)lroundf(frac * 1000.0f / CD_MOTOR_VEL_STEP) * CD_MOTOR_VEL_STEP;
+    if (vel < CD_MOTOR_VEL_STEP) vel = CD_MOTOR_VEL_STEP;
+    if (vel > 1000) vel = 1000;
+    int32_t cmd = (ay >= ax) ? (y > 0.0f ? CD_MOTOR_FORWARD : CD_MOTOR_REVERSE)
+                             : (x > 0.0f ? CD_MOTOR_RIGHT   : CD_MOTOR_LEFT);
+    cd_motor_set(cmd, vel);
+}
+
+// Suelta el joystick del motor: perilla al centro y STOP (siempre que se
+// haya tocado, aunque el ultimo comando ya fuera STOP — mas vale de mas).
+static void cd_motor_release(void)
+{
+    if (s_cd_motor_timer) lv_timer_pause(s_cd_motor_timer);
+    if (objects.cd_motor_knob) lv_obj_align(objects.cd_motor_knob, LV_ALIGN_CENTER, 0, 0);
+    if (!s_cd_motor_engaged) return;
+    s_cd_motor_engaged = false;
+    s_cd_motor_cmd = CD_MOTOR_STOP;
+    s_cd_motor_vel = 0;
+    cd_motor_send();
+    hmi_control_digital_motor_label_refresh();
+}
+
+void cd_motor_event_cb(lv_event_t *e)
+{
+    if (hmi_touch_multi_supported()) return; // ver cd_mt_timer_cb()
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_obj_t *base = lv_event_get_target(e);
+    float x, y;
+    switch (code) {
+    case LV_EVENT_PRESSED:
+        s_cd_motor_engaged = true;
+        if (!s_cd_motor_timer) s_cd_motor_timer = lv_timer_create(cd_motor_resend_cb, CD_MOTOR_RESEND_MS, NULL);
+        lv_timer_resume(s_cd_motor_timer);
+        cd_track(base, objects.cd_motor_knob, &x, &y);
+        cd_motor_from_xy(x, y);
+        break;
+    case LV_EVENT_PRESSING:
+        if (!s_cd_motor_engaged) break;
+        cd_track(base, objects.cd_motor_knob, &x, &y);
+        cd_motor_from_xy(x, y);
+        break;
+    case LV_EVENT_RELEASED:
+    case LV_EVENT_PRESS_LOST:
+        cd_motor_release();
+        break;
+    default:
+        break;
+    }
+}
+
+// ---- Control Digital con MULTITOUCH (los dos joysticks a la vez) ----
+// Cada CD_TICK_MS se leen todos los dedos (hmi_touch_get_points) y a cada
+// joystick se le asigna el suyo: si ya tenia uno, el dedo mas cercano a su
+// ultima posicion (mientras no "salte" mas de CD_MT_MAX_JUMP px); si no, un
+// dedo libre que haya caido dentro de su circulo. Un mismo dedo nunca maneja
+// los dos. Si el dedo se va, ese joystick se suelta (el motor manda STOP).
+// Si la pantalla deja de verse (cambio de pestana) se suelta todo; el timer
+// sigue corriendo para que responda al volver. Volver lo pausa.
+#define CD_MT_MAX_PTS       5
+#define CD_MT_GRAB_MARGIN   10  // px fuera del circulo que todavia toman el dedo
+#define CD_MT_MAX_JUMP      150 // px por lectura; mas que eso = otro dedo
+// Al levantar UN dedo, el GT911 puede mandar alguna lectura sin dedos (o con
+// el que queda corrido): si eso soltara al instante, el OTRO joystick
+// volveria al centro un instante (y el motor recibiria STOP + arranque). Por
+// eso un joystick recien se suelta cuando su dedo falta CD_MT_RELEASE_TICKS
+// lecturas seguidas (~90 ms); mientras tanto se queda donde estaba.
+#define CD_MT_RELEASE_TICKS 3
+
+typedef struct { bool on; lv_point_t p; uint8_t miss; } cd_finger_t;
+static lv_timer_t *s_cd_mt_timer = NULL;
+static cd_finger_t s_cd_mt_motor = { false, { 0, 0 }, 0 };
+static cd_finger_t s_cd_mt_servo = { false, { 0, 0 }, 0 };
+
+static bool cd_point_in_base(lv_obj_t *base, lv_point_t p, int32_t margin)
+{
+    lv_area_t a;
+    lv_obj_get_coords(base, &a);
+    int32_t dx = p.x - (a.x1 + a.x2) / 2;
+    int32_t dy = p.y - (a.y1 + a.y2) / 2;
+    int32_t r  = lv_obj_get_width(base) / 2 + margin;
+    return dx * dx + dy * dy <= r * r;
+}
+
+static bool cd_mt_pick(cd_finger_t *f, lv_obj_t *base, const lv_point_t *pts, uint8_t n, bool *used)
+{
+    int best = -1;
+    int32_t best_d = 0;
+    for (uint8_t i = 0; i < n; i++) {
+        if (used[i]) continue;
+        if (f->on) {
+            int32_t dx = pts[i].x - f->p.x, dy = pts[i].y - f->p.y;
+            int32_t d = dx * dx + dy * dy;
+            if (d <= CD_MT_MAX_JUMP * CD_MT_MAX_JUMP && (best < 0 || d < best_d)) { best = i; best_d = d; }
+        } else if (base && cd_point_in_base(base, pts[i], CD_MT_GRAB_MARGIN)) {
+            best = i;
+            break;
+        }
+    }
+    if (best < 0) return false;
+    used[best] = true;
+    f->p = pts[best];
+    return true;
+}
+
+// Joystick que YA tenia dedo: si esta lectura no lo trae, se lo sigue dando
+// por apoyado (en su ultima posicion) hasta CD_MT_RELEASE_TICKS faltas.
+static bool cd_mt_keep(cd_finger_t *f, bool found)
+{
+    if (found) { f->miss = 0; return true; }
+    if (++f->miss < CD_MT_RELEASE_TICKS) return true;
+    f->miss = 0;
+    return false;
+}
+
+static void cd_mt_release_all(void)
+{
+    cd_release();
+    cd_motor_release();
+    s_cd_mt_motor.on = s_cd_mt_servo.on = false;
+    s_cd_mt_motor.miss = s_cd_mt_servo.miss = 0;
+}
+
+static void cd_mt_timer_cb(lv_timer_t *t)
+{
+    // Pantalla oculta (otra pestana, otra vista de MODOS): suelta lo que haya
+    // quedado apretado pero NO pausa el timer — si se vuelve por la pestana,
+    // Control Digital sigue abierto y tiene que responder sin pasar por
+    // Volver. Solo Volver lo pausa (y CONTROL DIGITAL lo reanuda).
+    (void)t;
+    if (!objects.modes_control_digital_panel || !lv_obj_is_visible(objects.modes_control_digital_panel)) {
+        if (s_cd_mt_motor.on || s_cd_mt_servo.on || s_cd_active || s_cd_motor_engaged) cd_mt_release_all();
+        return;
+    }
+    lv_point_t pts[CD_MT_MAX_PTS];
+    bool used[CD_MT_MAX_PTS] = { false };
+    uint8_t n = hmi_touch_get_points(pts, CD_MT_MAX_PTS);
+
+    bool motor_was = s_cd_mt_motor.on, servo_was = s_cd_mt_servo.on;
+    bool motor_on = false, servo_on = false;
+    // Primero los joysticks que ya tienen dedo, para que uno libre no les robe el suyo.
+    if (motor_was)  motor_on = cd_mt_keep(&s_cd_mt_motor, cd_mt_pick(&s_cd_mt_motor, objects.cd_motor_base, pts, n, used));
+    if (servo_was)  servo_on = cd_mt_keep(&s_cd_mt_servo, cd_mt_pick(&s_cd_mt_servo, objects.cd_joy_base,   pts, n, used));
+    if (!motor_was) motor_on = cd_mt_pick(&s_cd_mt_motor, objects.cd_motor_base, pts, n, used);
+    if (!servo_was) servo_on = cd_mt_pick(&s_cd_mt_servo, objects.cd_joy_base,   pts, n, used);
+
+    // Motor
+    if (motor_on) {
+        if (!motor_was) {
+            s_cd_motor_engaged = true;
+            if (!s_cd_motor_timer) s_cd_motor_timer = lv_timer_create(cd_motor_resend_cb, CD_MOTOR_RESEND_MS, NULL);
+            lv_timer_resume(s_cd_motor_timer);
+        }
+        float x, y;
+        cd_track_at(objects.cd_motor_base, objects.cd_motor_knob, s_cd_mt_motor.p, &x, &y);
+        cd_motor_from_xy(x, y);
+    } else if (motor_was) {
+        cd_motor_release();
+    }
+    s_cd_mt_motor.on = motor_on;
+
+    // Cabeza/cuello (no arranca mientras corren la Demo, el Giro Automatico
+    // o un movimiento al centro; el dedo se vuelve a probar en la proxima lectura).
+    if (servo_on && !servo_was) {
+        if (demo_is_running() || g_play_state != AUTO_PLAY_IDLE) {
+            servo_on = false;
+        } else {
+            s_cd_head_f = (float)get_var_angle_head_value();
+            s_cd_neck_f = (float)get_var_angle_neck_value();
+            s_cd_active = true;
+            if (!s_cd_timer) s_cd_timer = lv_timer_create(cd_timer_cb, CD_TICK_MS, NULL);
+            lv_timer_resume(s_cd_timer);
+        }
+    }
+    if (servo_on) {
+        if (s_cd_active) cd_track_at(objects.cd_joy_base, objects.cd_joy_knob, s_cd_mt_servo.p, &s_cd_x, &s_cd_y);
+    } else if (servo_was) {
+        cd_release();
+    }
+    s_cd_mt_servo.on = servo_on;
+}
+
+void modes_btn_control_digital_cb(lv_event_t *e)
+{
+    (void)e;
+    modes_show_view(MODES_VIEW_CONTROL_DIGITAL);
+    auto_rotation_sync_labels(get_var_angle_head_value(), get_var_angle_neck_value());
+    hmi_control_digital_motor_label_refresh();
+    if (hmi_touch_multi_supported()) {
+        s_cd_mt_motor.on = s_cd_mt_servo.on = false;
+        s_cd_mt_motor.miss = s_cd_mt_servo.miss = 0;
+        if (!s_cd_mt_timer) s_cd_mt_timer = lv_timer_create(cd_mt_timer_cb, CD_TICK_MS, NULL);
+        lv_timer_resume(s_cd_mt_timer);
+    }
+}
+
+void cd_btn_volver_cb(lv_event_t *e)
+{
+    (void)e;
+    cd_mt_release_all();
+    if (s_cd_mt_timer) lv_timer_pause(s_cd_mt_timer);
+    modes_show_view(MODES_VIEW_HOME);
+}
+
+// Centrar: cabeza/cuello al centro guardado (Control por Puntos > Guardar
+// centrado, 90/90 por defecto), suave, con el mismo movimiento de un solo
+// tiro que usa Control por Puntos al entrar. Mientras dura, el joystick no
+// responde (g_play_state != IDLE), asi no se pisan.
+void cd_btn_centrar_cb(lv_event_t *e)
+{
+    (void)e;
+    cd_release();
+    if (g_play_state == AUTO_PLAY_IDLE) auto_rotation_start_one_shot_move(g_center_head, g_center_neck);
+}
 
 // ---- Config Auto Rotation — selector de recorrido ----
 
@@ -2314,13 +2934,16 @@ static void dev_nvs_write_pin(const char *key, int val)
 #define NVS_KEY_UI_THEME "ui_theme"
 #define NVS_KEY_UI_LANG  "ui_lang"
 #define NVS_KEY_UI_BATD  "ui_batd"
+#define NVS_KEY_UI_BATALERT "ui_batal"
 
 void hmi_ui_prefs_save_theme(int theme_idx)      { dev_nvs_write_pin(NVS_KEY_UI_THEME, theme_idx); }
 void hmi_ui_prefs_save_lang(int lang_id)         { dev_nvs_write_pin(NVS_KEY_UI_LANG, lang_id); }
 void hmi_ui_prefs_save_bat_display(int percent)  { dev_nvs_write_pin(NVS_KEY_UI_BATD, percent); }
+void hmi_ui_prefs_save_battery_alert(int enabled) { dev_nvs_write_pin(NVS_KEY_UI_BATALERT, enabled); }
 int  hmi_ui_prefs_load_theme(void)               { return dev_nvs_read_pin(NVS_KEY_UI_THEME, 1); }
 int  hmi_ui_prefs_load_lang(void)                { return dev_nvs_read_pin(NVS_KEY_UI_LANG, 0); }
 int  hmi_ui_prefs_load_bat_display(void)         { return dev_nvs_read_pin(NVS_KEY_UI_BATD, 0); }
+int  hmi_ui_prefs_load_battery_alert(void)       { return dev_nvs_read_pin(NVS_KEY_UI_BATALERT, 1); }
 
 static void dev_nvs_read_pin_str(char *out, size_t max)
 {
@@ -2722,6 +3345,7 @@ static lv_obj_t *s_bigview_console_batt_caption = NULL;
 static lv_obj_t *s_bigview_distance_caption = NULL; // "DISTANCIA RECORRIDA"
 static lv_obj_t *s_bigview_trace_caption    = NULL; // "TRAZA DE RECORRIDO"
 static lv_obj_t *s_bigview_robot_model_label  = NULL; // debajo del logo Welltepp
+static lv_obj_t *s_bigview_robot_model_label_bold = NULL; // copia +1px encima, ver "falso bold" mas abajo
 static lv_obj_t *s_bigview_led_bt             = NULL; // al lado de la bateria ROBOT
 static lv_obj_t *s_bigview_led_online         = NULL;
 // Barra de niveles (4 escalones: 25/50/75/100%) del brillo del LED del
@@ -3196,16 +3820,38 @@ static void encoder_bigview_create(void)
     lv_obj_set_pos(logo, 16, 16);
     lv_obj_remove_flag(logo, LV_OBJ_FLAG_CLICKABLE);
 
-    // Modelo del robot (RD80/RD90/RD100) — debajo del logo Welltepp, en
-    // blanco. Arranca oculto (como el pill de la barra superior) y solo
-    // aparece cuando llega HMI_REG_ROBOT_MODEL real — ver apply_robot_model().
+    // Modelo del robot (RD80/RD90/RD100) — CENTRADO debajo del logo Welltepp
+    // (no pegado a su borde izquierdo: el ancho del label se fija igual al
+    // del logo ya renderizado y el texto se centra adentro, asi que
+    // "RD80"/"RD90"/"RD100" quedan siempre centrados pase lo que pase sin
+    // tener que recalcular nada cuando cambia el texto). Arranca oculto
+    // (como el pill de la barra superior) y solo aparece cuando llega
+    // HMI_REG_ROBOT_MODEL real — ver apply_robot_model().
     lv_obj_t *model_label = lv_label_create(panel);
     s_bigview_robot_model_label = model_label;
     lv_obj_set_style_text_font(model_label, &lv_font_montserrat_24, 0);
     lv_obj_set_style_text_color(model_label, lv_color_hex(0xffffffff), 0);
+    lv_obj_set_style_text_align(model_label, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_text(model_label, "RD--");
-    lv_obj_set_pos(model_label, 16, 42);
+    lv_obj_set_width(model_label, lv_obj_get_width(logo));
+    lv_obj_align_to(model_label, logo, LV_ALIGN_OUT_BOTTOM_MID, 0, 6);
     lv_obj_add_flag(model_label, LV_OBJ_FLAG_HIDDEN);
+
+    // "Falso bold": las fuentes Montserrat que trae LVGL son de un solo
+    // grosor (no hay variante bold real disponible), asi que para que se
+    // vea mas parecido al peso del logo se dibuja una segunda copia
+    // identica 1px a la derecha, encima de la primera — truco clasico para
+    // fuentes bitmap sin variante bold. Van siempre sincronizadas (mismo
+    // texto/visibilidad) desde apply_robot_model().
+    lv_obj_t *model_label_bold = lv_label_create(panel);
+    s_bigview_robot_model_label_bold = model_label_bold;
+    lv_obj_set_style_text_font(model_label_bold, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(model_label_bold, lv_color_hex(0xffffffff), 0);
+    lv_obj_set_style_text_align(model_label_bold, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(model_label_bold, "RD--");
+    lv_obj_set_width(model_label_bold, lv_obj_get_width(logo));
+    lv_obj_align_to(model_label_bold, model_label, LV_ALIGN_TOP_LEFT, 1, 0);
+    lv_obj_add_flag(model_label_bold, LV_OBJ_FLAG_HIDDEN);
 
     // Bateria robot/consola — esquina superior derecha, mismo estilo de
     // barra que la tarjeta SYSTEM BATTERY de Control General. Ancho
@@ -6122,7 +6768,6 @@ static void bat_blink_border_cb(lv_timer_t *timer)
 // hmi_reapply_cached_boot_regs()) apenas panels_startup_init() termina.
 static int32_t s_cached_robot_serial = -1;
 static int32_t s_cached_robot_model  = -1;
-static int32_t s_cached_fw_version   = -1;
 
 static void apply_robot_serial(int32_t value)
 {
@@ -6154,39 +6799,44 @@ static void apply_robot_model(int32_t value)
             lv_label_set_text(s_bigview_robot_model_label, model);
             lv_obj_remove_flag(s_bigview_robot_model_label, LV_OBJ_FLAG_HIDDEN);
         }
+        if (s_bigview_robot_model_label_bold) {
+            lv_label_set_text(s_bigview_robot_model_label_bold, model);
+            lv_obj_remove_flag(s_bigview_robot_model_label_bold, LV_OBJ_FLAG_HIDDEN);
+        }
+        // Ajustes > Camara: solo el RD100 trae camara de reversa, asi que
+        // esa sub-seccion solo se muestra cuando el modelo detectado es ese.
+        if (objects.settings_btn_camera) {
+            bool is_rd100 = (value == 2);
+            if (is_rd100) {
+                lv_obj_remove_flag(objects.settings_btn_camera, LV_OBJ_FLAG_HIDDEN);
+            } else {
+                lv_obj_add_flag(objects.settings_btn_camera, LV_OBJ_FLAG_HIDDEN);
+                // Si el usuario estaba parado justo en Camara y cambio el
+                // modelo detectado (ej. se conecto otro robot), lo saca de
+                // ahi para que no quede viendo un panel inaccesible.
+                if (objects.settings_content_camera &&
+                    !lv_obj_has_flag(objects.settings_content_camera, LV_OBJ_FLAG_HIDDEN)) {
+                    action_settings_btn_brightness(NULL);
+                }
+            }
+        }
     );
-}
-
-static void apply_fw_version(int32_t value)
-{
-    uint8_t major = (value >> 16) & 0xFF;
-    uint8_t minor = (value >> 8)  & 0xFF;
-    uint8_t patch = value & 0xFF;
-    char buff[16];
-    snprintf(buff, sizeof(buff), "v%u.%u.%u", major, minor, patch);
-    // Fila "Firmware WC :" en System Info > Version, debajo de "Firmware :"
-    // (la del propio HMI) — WC = firmware de la consola (WP_C_V9_UP).
-    HMI_LV_SAFE_OBJ(objects.sysinfo_console_fw_value,
-        lv_label_set_text(objects.sysinfo_console_fw_value, buff));
 }
 
 void hmi_reapply_cached_boot_regs(void)
 {
     if (s_cached_robot_serial >= 0) apply_robot_serial(s_cached_robot_serial);
     if (s_cached_robot_model  >= 0) apply_robot_model(s_cached_robot_model);
-    if (s_cached_fw_version   >= 0) apply_fw_version(s_cached_fw_version);
 }
 
 //*************************************************************************************
-// Settings > Camera: interruptor de 3 posiciones para RL1 (solo reversa).
+// Settings > Camera: interruptor ON/OFF para RL1, manual (no sigue la reversa).
 // ON = fuerza RL1 encendido sin importar el estado del motor.
-// OFF = desactivado, no manda nada (ni al elegir esta opcion ni por reversa).
-// AUTO = comportamiento de siempre, sigue la reversa (default).
+// OFF = lo apaga (default).
 //*************************************************************************************
-typedef enum { RL1_MODE_ON = 0, RL1_MODE_OFF, RL1_MODE_AUTO } rl1_mode_t;
+typedef enum { RL1_MODE_ON = 0, RL1_MODE_OFF } rl1_mode_t;
 static rl1_mode_t s_rl1_mode = RL1_MODE_OFF;
-static bool s_rl1_sent = false;           // ultimo valor de RL1 realmente mandado
-static bool s_last_reversing_state = false; // ultimo estado de reversa conocido (para resincronizar al volver a AUTO)
+static bool s_last_reversing_state = false; // ultimo estado de reversa conocido (combo del panel de manejo)
 
 // Combo para abrir el panel de manejo: reversa (HMI_REG_MOTOR) + joystick
 // de servo hacia abajo (HMI_REG_JOY2), AMBOS a la vez. Se llama desde los
@@ -6242,14 +6892,16 @@ static void camera_rl1_mode_style_update(void)
 {
     hmi_style_btn(objects.cam_rl1_btn_on,   s_rl1_mode == RL1_MODE_ON);
     hmi_style_btn(objects.cam_rl1_btn_off,  s_rl1_mode == RL1_MODE_OFF);
-    hmi_style_btn(objects.cam_rl1_btn_auto, s_rl1_mode == RL1_MODE_AUTO);
+    if (objects.cam_front_led)
+        lv_led_set_brightness(objects.cam_front_led, s_rl1_mode == RL1_MODE_OFF ? 255 : 0);
+    if (objects.cam_reverse_led)
+        lv_led_set_brightness(objects.cam_reverse_led, s_rl1_mode == RL1_MODE_ON ? 255 : 0);
 }
 
 static void camera_rl1_on_cb(lv_event_t *e)
 {
     (void)e;
     s_rl1_mode = RL1_MODE_ON;
-    s_rl1_sent = true;
     hmi_send_data(HMI_REG_RL1, 1);
     camera_rl1_mode_style_update();
 }
@@ -6257,29 +6909,12 @@ static void camera_rl1_on_cb(lv_event_t *e)
 static void camera_rl1_off_cb(lv_event_t *e)
 {
     (void)e;
-    // Apaga el rele de una (no lo deja en lo que haya quedado) y despues
-    // ya no vuelve a mandar nada mientras siga en OFF, aunque el robot
-    // entre/salga de reversa.
     s_rl1_mode = RL1_MODE_OFF;
-    s_rl1_sent = false;
     hmi_send_data(HMI_REG_RL1, 0);
     camera_rl1_mode_style_update();
 }
 
-static void camera_rl1_auto_cb(lv_event_t *e)
-{
-    (void)e;
-    s_rl1_mode = RL1_MODE_AUTO;
-    // Resincroniza de inmediato con el estado real de reversa, por si
-    // quedo desfasado mientras estaba en ON/OFF.
-    if (s_last_reversing_state != s_rl1_sent) {
-        s_rl1_sent = s_last_reversing_state;
-        hmi_send_data(HMI_REG_RL1, s_rl1_sent ? 1 : 0);
-    }
-    camera_rl1_mode_style_update();
-}
-
-// Cablea los 3 botones y deja el estado inicial (AUTO) — llamar una vez
+// Cablea los 2 botones y deja el estado inicial (OFF) — llamar una vez
 // desde app_main() junto con el resto del cableado post ui_init().
 static void camera_rl1_mode_wire(void)
 {
@@ -6287,8 +6922,6 @@ static void camera_rl1_mode_wire(void)
         lv_obj_add_event_cb(objects.cam_rl1_btn_on, camera_rl1_on_cb, LV_EVENT_CLICKED, NULL);
     if (objects.cam_rl1_btn_off)
         lv_obj_add_event_cb(objects.cam_rl1_btn_off, camera_rl1_off_cb, LV_EVENT_CLICKED, NULL);
-    if (objects.cam_rl1_btn_auto)
-        lv_obj_add_event_cb(objects.cam_rl1_btn_auto, camera_rl1_auto_cb, LV_EVENT_CLICKED, NULL);
     camera_rl1_mode_style_update();
 }
 
@@ -6409,6 +7042,43 @@ static void capture_toast_show(const char *text)
 #define JOY2_Y_CENTER      2132
 #define JOY_SERVO_DEADZONE 300
 
+// Sincroniza cabeza/cuello del HMI con la posicion REAL que informa la
+// consola (HMI_REG_SRV1/SRV2_ANGLE). Sin esto, si la consola mueve los servos
+// por su cuenta (p.ej. el boton fisico J2 de centrado), el HMI se queda con
+// el angulo viejo y Control Digital / los +/- arrancan desde ahi: al primer
+// movimiento mandan un salto grande. Reglas:
+//  - si el valor es igual al actual, no hace nada;
+//  - mientras el HMI esta mandando angulos (ultimo envio hace menos de
+//    HMI_ANGLE_ECHO_HOLDOFF_MS: joystick, +/-, Demo, Giro Automatico...) se
+//    ignora, para que el eco atrasado de la consola no "tire para atras";
+//  - se recorta a 0-180 (rango de los angulos del HMI).
+// Llega desde la tarea de RX UART: todo lo de LVGL va bajo el lock.
+#define HMI_ANGLE_ECHO_HOLDOFF_MS 600
+static void hmi_sync_servo_angle_from_console(bool head, int32_t value)
+{
+    if (value < 0)   value = 0;
+    if (value > 180) value = 180;
+    TickType_t last = s_angle_tx_tick[head ? 0 : 1];
+    if (last != 0 && (xTaskGetTickCount() - last) < pdMS_TO_TICKS(HMI_ANGLE_ECHO_HOLDOFF_MS)) return;
+    if (esp_lv_adapter_lock(-1) != ESP_OK) return;
+    int32_t cur = head ? get_var_angle_head_value() : get_var_angle_neck_value();
+    if (value != cur) {
+        char buff[10];
+        lv_snprintf(buff, sizeof(buff), "%03d", (int)value);
+        if (head) {
+            set_var_angle_head_value(value);
+            set_var_angle_head_string(buff);
+            s_cd_head_f = (float)value; // si Control Digital esta apretado, sigue desde aca
+        } else {
+            set_var_angle_neck_value(value);
+            set_var_angle_neck_string(buff);
+            s_cd_neck_f = (float)value;
+        }
+        auto_rotation_sync_labels(get_var_angle_head_value(), get_var_angle_neck_value());
+    }
+    esp_lv_adapter_unlock();
+}
+
 void hmi_handle_reg(uint8_t reg, int32_t value)
 {
     switch (reg)
@@ -6431,12 +7101,20 @@ void hmi_handle_reg(uint8_t reg, int32_t value)
                 lv_obj_add_flag(objects.robot_model_pill, LV_OBJ_FLAG_HIDDEN));
             HMI_LV_SAFE_OBJ(s_bigview_robot_model_label,
                 lv_obj_add_flag(s_bigview_robot_model_label, LV_OBJ_FLAG_HIDDEN));
+            HMI_LV_SAFE_OBJ(s_bigview_robot_model_label_bold,
+                lv_obj_add_flag(s_bigview_robot_model_label_bold, LV_OBJ_FLAG_HIDDEN));
             // El S/N tambien queda obsoleto al desconectar: limpiarlo para
             // no mostrar el ultimo valor de un robot que ya no esta.
             HMI_LV_SAFE_OBJ(objects.sysinfo_robot_serial_value,
                 lv_label_set_text(objects.sysinfo_robot_serial_value, "---"));
             HMI_LV_SAFE_OBJ(objects.robot_serial_number,
                 lv_label_set_text(objects.robot_serial_number, "---"));
+            // La bateria del robot tambien queda obsoleta al desconectar —
+            // sin esto se quedaba mostrando la ultima lectura para siempre.
+            // Reusa el mismo case de HMI_REG_ROBOT_VOLTAGE con value=0, que
+            // ya pinta la barra gris "sin datos" y apaga cualquier alerta/
+            // parpadeo en curso.
+            hmi_handle_reg(HMI_REG_ROBOT_VOLTAGE, 0);
         }
         HMI_LV_SAFE_OBJ(objects.led_online, lv_led_set_brightness(objects.led_online, (uint8_t)value));
         HMI_LV_SAFE_OBJ(s_bigview_led_online, lv_led_set_brightness(s_bigview_led_online, (uint8_t)value));
@@ -6564,6 +7242,12 @@ void hmi_handle_reg(uint8_t reg, int32_t value)
             show_alert  = true;
             extreme_crit = (value <= 13200);
         }
+
+        // Alerta desactivada por el usuario (Settings > Battery > Battery
+        // Alert): el color de la barra sigue reflejando el nivel real
+        // (sigue siendo informativo), pero se suprime el texto de alerta y
+        // el parpadeo — igual que si nunca se hubiera cruzado el umbral.
+        if (!g_battery_alert_enabled) show_alert = false;
 
         HMI_LV_LOCKED(
             if (objects.robot_voltage != NULL) {
@@ -6830,28 +7514,8 @@ void hmi_handle_reg(uint8_t reg, int32_t value)
         s_motor_cmd = (int16_t)cmd;
         s_motor_vel = (int16_t)(value & 0xFFFF);
 #endif
-        // Settings > Camera: el LED y el cuadro "RETROCEDIENDO"/"AVANZANDO"
-        // son fijos (no se ocultan ni cambian de tamano, para que nada se
-        // corra de lugar); solo el brillo del LED y el color del texto
-        // cambian con el estado.
         bool reversing = (cmd == MOTOR_CMD_REVERSE);
         bool advancing = (cmd == MOTOR_CMD_FORWARD);
-        HMI_LV_LOCKED(
-            if (objects.cam_reverse_led) {
-                lv_led_set_brightness(objects.cam_reverse_led, reversing ? 255 : 0);
-            }
-            if (objects.cam_reverse_label) {
-                lv_color_t txt = reversing ? lv_color_hex(0xffe74c3c) : lv_color_hex(0xffaaaaaa);
-                lv_obj_set_style_text_color(objects.cam_reverse_label, txt, LV_PART_MAIN | LV_STATE_DEFAULT);
-            }
-            if (objects.cam_forward_led) {
-                lv_led_set_brightness(objects.cam_forward_led, advancing ? 255 : 0);
-            }
-            if (objects.cam_forward_label) {
-                lv_color_t txt = advancing ? lv_color_hex(0xff27ae60) : lv_color_hex(0xffaaaaaa);
-                lv_obj_set_style_text_color(objects.cam_forward_label, txt, LV_PART_MAIN | LV_STATE_DEFAULT);
-            }
-        );
         // RL2 (avance): sin interruptor, sigue el motor siempre, solo al
         // cambiar de estado.
         static bool s_rl2_sent = false;
@@ -6860,14 +7524,9 @@ void hmi_handle_reg(uint8_t reg, int32_t value)
             hmi_send_data(HMI_REG_RL2, advancing ? 1 : 0);
         }
 
-        // RL1 (reversa): tiene el interruptor de 3 posiciones (Settings >
-        // Camera). Solo se auto-manda en modo AUTO; en ON/OFF el usuario
-        // manda el control (ver camera_rl1_*_cb()).
+        // RL1 ya no sigue la reversa: solo lo manejan los botones ON/OFF de
+        // Settings > Camera (ver camera_rl1_*_cb()).
         s_last_reversing_state = reversing;
-        if (s_rl1_mode == RL1_MODE_AUTO && reversing != s_rl1_sent) {
-            s_rl1_sent = reversing;
-            hmi_send_data(HMI_REG_RL1, reversing ? 1 : 0);
-        }
 
         // Combo para abrir el panel de manejo: reversa + joystick de servo
         // (JOY2) hacia abajo, AMBOS a la vez. Ver bigview_check_reverse_servo_combo().
@@ -6881,6 +7540,7 @@ void hmi_handle_reg(uint8_t reg, int32_t value)
 #ifdef DEV_MODE
         s_srv1_angle = (int16_t)value;
 #endif
+        hmi_sync_servo_angle_from_console(true, value);
         break;
     }
 
@@ -6890,6 +7550,7 @@ void hmi_handle_reg(uint8_t reg, int32_t value)
 #ifdef DEV_MODE
         s_srv2_angle = (int16_t)value;
 #endif
+        hmi_sync_servo_angle_from_console(false, value);
         break;
     }
 
@@ -6925,8 +7586,10 @@ void hmi_handle_reg(uint8_t reg, int32_t value)
 
     case HMI_REG_FW_VERSION:
     {
-        s_cached_fw_version = value;
-        apply_fw_version(value);
+        // Sin UI propia por ahora (se probo mostrarla en System Info >
+        // Version, pero el registro se pierde casi siempre por una carrera
+        // de arranque del lado de la consola — se manda una sola vez, sin
+        // reintento, ver WP_C_V9_UP\main\main.c). Se deja solo el log.
         uint8_t major = (value >> 16) & 0xFF;
         uint8_t minor = (value >> 8)  & 0xFF;
         uint8_t patch = value & 0xFF;
@@ -6989,8 +7652,13 @@ static void hmi_conn_indicator_create(void)
     lv_timer_create(hmi_conn_check_cb, 1000, NULL);
 }
 
-static void hmi_log_refresh(void)
+// Repinta el panel de logs. lv_lock_timeout_ms: -1 = esperar el lock de LVGL
+// (como siempre), 0 = solo si esta libre ahora (lo usa vTaskHmiPing para no
+// trabarse). El texto se arma DENTRO del lock: buf es compartido entre tareas.
+static void hmi_log_refresh_ex(int32_t lv_lock_timeout_ms)
 {
+    if (!objects.sysinfo_logs_body && !s_logs_tbox) return;
+    if (esp_lv_adapter_lock(lv_lock_timeout_ms) != ESP_OK) return;
     static char buf[LOG_MAX_LINES * LOG_LINE_LEN + 1];
     buf[0] = '\0';
     int start = (s_log_count < LOG_MAX_LINES) ? 0 : s_log_head;
@@ -6999,9 +7667,12 @@ static void hmi_log_refresh(void)
         strcat(buf, s_log_lines[idx]);
         if (i < s_log_count - 1) strcat(buf, "\n");
     }
-    HMI_LV_SAFE_OBJ(objects.sysinfo_logs_body, lv_label_set_text(objects.sysinfo_logs_body, buf));
-    HMI_LV_SAFE_OBJ(s_logs_tbox, lv_obj_scroll_to_y(s_logs_tbox, LV_COORD_MAX, LV_ANIM_OFF));
+    if (objects.sysinfo_logs_body) lv_label_set_text(objects.sysinfo_logs_body, buf);
+    if (s_logs_tbox) lv_obj_scroll_to_y(s_logs_tbox, LV_COORD_MAX, LV_ANIM_OFF);
+    esp_lv_adapter_unlock();
 }
+
+static void hmi_log_refresh(void) { hmi_log_refresh_ex(-1); }
 
 static void logs_clear_cb(lv_event_t *e)
 {
@@ -7110,14 +7781,25 @@ static void logs_panel_create(lv_obj_t *content_area, lv_obj_t *nav_col)
     hmi_log_refresh();
 }
 
-void hmi_log(log_type_t type, const char *msg)
+// Varias tareas escriben al log (HMI Rx, HMI Ping, LVGL...): el renglon se
+// reserva bajo un spinlock corto y despues se escribe.
+static portMUX_TYPE s_log_mux = portMUX_INITIALIZER_UNLOCKED;
+
+static void hmi_log_ex(log_type_t type, const char *msg, int32_t lv_lock_timeout_ms)
 {
     static const char *prefix[] = { "[OK ] ", "[ERR] ", "[RX ] ", "[TX ] ", "[WARN]" };
-    snprintf(s_log_lines[s_log_head], LOG_LINE_LEN,
-             "%s %s", prefix[type], msg);
+    portENTER_CRITICAL(&s_log_mux);
+    int slot = s_log_head;
     s_log_head = (s_log_head + 1) % LOG_MAX_LINES;
     if (s_log_count < LOG_MAX_LINES) s_log_count++;
-    hmi_log_refresh();
+    portEXIT_CRITICAL(&s_log_mux);
+    snprintf(s_log_lines[slot], LOG_LINE_LEN, "%s %s", prefix[type], msg);
+    hmi_log_refresh_ex(lv_lock_timeout_ms);
+}
+
+void hmi_log(log_type_t type, const char *msg)
+{
+    hmi_log_ex(type, msg, -1);
 }
 
 #ifdef DEV_MODE
@@ -7149,6 +7831,9 @@ void hmi_send_data(uint8_t reg, int32_t value)
     hmi_tx_frame_t frame = {
         .reg = reg,
         .value = value};
+
+    if (reg == HMI_REG_ANGLE_HEAD_CHANGED)      s_angle_tx_tick[0] = xTaskGetTickCount();
+    else if (reg == HMI_REG_ANGLE_NECK_CHANGED) s_angle_tx_tick[1] = xTaskGetTickCount();
 
     if(pdFALSE == xQueueSend(xQueueHmiTx, &frame, pdMS_TO_TICKS(10))) {
         ESP_LOGE(TAG, "xQueueHmiTx Llena");

@@ -2,6 +2,8 @@
 #include "lang.h"
 #include "screens.h"
 
+void hmi_control_digital_motor_label_refresh(void); /* main.c (Control Digital) */
+
 /* ---- Spanish ---- */
 static const lang_strings_t s_es = {
     .tab_general        = "CONTROL GENERAL",
@@ -30,6 +32,14 @@ static const lang_strings_t s_es = {
     .btn_pausar_auto_rotation = "PAUSAR",
     .btn_reanudar_auto_rotation = "REANUDAR",
     .title_control_puntos     = " CONTROL POR PUNTOS",
+    .btn_control_digital      = "CONTROL\nDIGITAL",
+    .title_control_digital    = " CONTROL DIGITAL",
+    .cd_lbl_head              = "Cabeza",
+    .cd_lbl_neck              = "Cuello",
+    .btn_centrar              = "Centrar",
+    .cd_caption_motor         = "MOTOR",
+    .cd_caption_servos        = "CABEZA / CUELLO",
+    .cd_motor_dir             = { "DETENIDO", "ADELANTE", "ATRAS", "DERECHA", "IZQUIERDA" },
     .lbl_neck_servo2          = "Cuello (Servo 2):",
     .lbl_head_servo1          = "Cabeza (Servo 1):",
     .btn_guardar_centrado     = LV_SYMBOL_SAVE " Guardar centrado nuevo",
@@ -141,8 +151,8 @@ static const lang_strings_t s_es = {
     .nav_camera              = "Camara",
     .title_camera            = " CAMARA",
     .desc_camera             = "Indicador de reversa, segun la direccion del motor del robot",
-    .cam_label_reverse       = "CAMARA #2",
-    .cam_label_forward       = "AVANZANDO",
+    .cam_btn_front           = "Camara delantera",
+    .cam_btn_rear            = "Camara trasera",
     .nav_bluetooth               = "Bluetooth",
     .title_bluetooth             = " BLUETOOTH",
     .desc_bluetooth              = "Dispositivo BLE conectado a la consola",
@@ -216,6 +226,14 @@ static const lang_strings_t s_en = {
     .btn_pausar_auto_rotation = "PAUSE",
     .btn_reanudar_auto_rotation = "RESUME",
     .title_control_puntos     = " POINT CONTROL",
+    .btn_control_digital      = "DIGITAL\nCONTROL",
+    .title_control_digital    = " DIGITAL CONTROL",
+    .cd_lbl_head              = "Head",
+    .cd_lbl_neck              = "Neck",
+    .btn_centrar              = "Center",
+    .cd_caption_motor         = "MOTOR",
+    .cd_caption_servos        = "HEAD / NECK",
+    .cd_motor_dir             = { "STOPPED", "FORWARD", "REVERSE", "RIGHT", "LEFT" },
     .lbl_neck_servo2          = "Neck (Servo 2):",
     .lbl_head_servo1          = "Head (Servo 1):",
     .btn_guardar_centrado     = LV_SYMBOL_SAVE " Save new center",
@@ -325,8 +343,8 @@ static const lang_strings_t s_en = {
     .nav_camera              = "Camera",
     .title_camera            = " CAMERA",
     .desc_camera             = "Reverse indicator, driven by the robot's motor direction",
-    .cam_label_reverse       = "CAMERA #2",
-    .cam_label_forward       = "FORWARD",
+    .cam_btn_front           = "Front camera",
+    .cam_btn_rear            = "Rear camera",
     .nav_bluetooth               = "Bluetooth",
     .title_bluetooth             = " BLUETOOTH",
     .desc_bluetooth              = "BLE device connected to the console",
@@ -400,6 +418,14 @@ static const lang_strings_t s_pt = {
     .btn_pausar_auto_rotation = "PAUSAR",
     .btn_reanudar_auto_rotation = "RETOMAR",
     .title_control_puntos     = " CONTROLE POR PONTOS",
+    .btn_control_digital      = "CONTROLE\nDIGITAL",
+    .title_control_digital    = " CONTROLE DIGITAL",
+    .cd_lbl_head              = "Cabeca",
+    .cd_lbl_neck              = "Pescoco",
+    .btn_centrar              = "Centralizar",
+    .cd_caption_motor         = "MOTOR",
+    .cd_caption_servos        = "CABECA / PESCOCO",
+    .cd_motor_dir             = { "PARADO", "FRENTE", "RE", "DIREITA", "ESQUERDA" },
     .lbl_neck_servo2          = "Pescoco (Servo 2):",
     .lbl_head_servo1          = "Cabeca (Servo 1):",
     .btn_guardar_centrado     = LV_SYMBOL_SAVE " Salvar novo centro",
@@ -511,8 +537,8 @@ static const lang_strings_t s_pt = {
     .nav_camera              = "Camera",
     .title_camera            = " CAMERA",
     .desc_camera             = "Indicador de re, controlado pela direcao do motor do robo",
-    .cam_label_reverse       = "CAMERA #2",
-    .cam_label_forward       = "AVANCANDO",
+    .cam_btn_front           = "Camera frontal",
+    .cam_btn_rear            = "Camera traseira",
     .nav_bluetooth               = "Bluetooth",
     .title_bluetooth             = " BLUETOOTH",
     .desc_bluetooth              = "Dispositivo BLE conectado ao console",
@@ -614,6 +640,7 @@ void lang_apply(void) {
     CLBL(objects.btn_control_por_puntos,      L->btn_control_puntos);
     CLBL(objects.btn_config_auto_rotation,    L->btn_config_auto_rotation);
     CLBL(objects.btn_stop_giro_automatico,    L->btn_stop_auto_rotation);
+    CLBL(objects.btn_control_digital,         L->btn_control_digital);
     CLBL(objects.btn_encoder_reset, L->btn_reset);
 
     /* Modes - Control por Puntos (pantalla completa, barra superior fija).
@@ -623,6 +650,14 @@ void lang_apply(void) {
     LBL(objects.cp_title_label, L->title_control_puntos);
     CLBL(objects.cp_btn_guardar_centrado, L->btn_guardar_centrado);
     CLBL(objects.cp_btn_volver,           L->btn_volver);
+
+    /* Modes - Control Digital (joystick tactil cabeza/cuello) */
+    LBL(objects.cd_title_label, L->title_control_digital);
+    CLBL(objects.cd_btn_volver, L->btn_volver);
+    CLBL(objects.cd_btn_centrar, L->btn_centrar);
+    LBL(objects.cd_motor_caption, L->cd_caption_motor);
+    LBL(objects.cd_servo_caption, L->cd_caption_servos);
+    hmi_control_digital_motor_label_refresh(); /* "Motor: <estado>" en el idioma nuevo */
 
     /* Modes - Config Auto Rotation: selector de recorrido */
     LBL(objects.autorot_picker_title_label,    L->title_config_auto_rotation);
@@ -766,7 +801,7 @@ void lang_apply(void) {
     if (objects.tech_desc_b) lv_label_set_text(objects.tech_desc_b, L->desc_tech_b);
 
     /* Settings - Camera nav button + panel (0=titulo, 1=descripcion,
-     * 2=fila RETROCEDIENDO, 3=fila AVANZANDO) */
+     * 2=fila LED + ON/OFF) */
     CLBL(objects.settings_btn_camera, L->nav_camera);
     if (objects.settings_content_camera) {
         lv_obj_t *panel = objects.settings_content_camera;
@@ -775,8 +810,8 @@ void lang_apply(void) {
         lv_obj_t *desc = lv_obj_get_child(panel, 1);
         if (desc) lv_label_set_text(desc, L->desc_camera);
     }
-    if (objects.cam_reverse_label) lv_label_set_text(objects.cam_reverse_label, L->cam_label_reverse);
-    if (objects.cam_forward_label) lv_label_set_text(objects.cam_forward_label, L->cam_label_forward);
+    if (objects.cam_rl1_btn_off) CLBL(objects.cam_rl1_btn_off, L->cam_btn_front);
+    if (objects.cam_rl1_btn_on)  CLBL(objects.cam_rl1_btn_on,  L->cam_btn_rear);
 
     /* Settings - Bluetooth nav button + panel (0=titulo, 1=desc; el label
      * de estado Conectado/Sin conexion depende del estado actual — ver

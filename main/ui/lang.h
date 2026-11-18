@@ -34,6 +34,14 @@ typedef struct {
     const char *btn_pausar_auto_rotation;
     const char *btn_reanudar_auto_rotation;
     const char *title_control_puntos;
+    const char *btn_control_digital;
+    const char *title_control_digital;
+    const char *cd_lbl_head;        /* "Cabeza" (Control Digital, debajo del joystick) */
+    const char *cd_lbl_neck;        /* "Cuello" */
+    const char *btn_centrar;
+    const char *cd_caption_motor;   /* titulo del joystick del motor */
+    const char *cd_caption_servos;  /* titulo del joystick de cabeza/cuello */
+    const char *cd_motor_dir[5];    /* estado del motor: STOP/ADELANTE/ATRAS/DERECHA/IZQUIERDA (orden = cmd 0-4) */
     const char *lbl_neck_servo2;
     const char *lbl_head_servo1;
     const char *btn_guardar_centrado;
@@ -129,8 +137,8 @@ typedef struct {
     const char *nav_camera;
     const char *title_camera;
     const char *desc_camera;
-    const char *cam_label_reverse; /* cuadro que antes decia "RETROCEDIENDO" */
-    const char *cam_label_forward; /* cuadro "AVANZANDO" */
+    const char *cam_btn_front; /* boton OFF de RL1 */
+    const char *cam_btn_rear;  /* boton ON de RL1 */
     /* Settings - Bluetooth panel */
     const char *nav_bluetooth;
     const char *title_bluetooth;

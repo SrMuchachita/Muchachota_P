@@ -1106,6 +1106,31 @@ void create_screen_main() {
                                         }
                                     }
                                 }
+                                {
+                                    // btn_control_digital — fila 3 (joystick tactil cabeza/cuello)
+                                    lv_obj_t *obj = lv_button_create(parent_obj);
+                                    objects.btn_control_digital = obj;
+                                    lv_obj_set_size(obj, LV_PCT(31), 90);
+                                    lv_obj_add_event_cb(obj, modes_btn_control_digital_cb, LV_EVENT_CLICKED, (void *)0);
+                                    lv_obj_set_style_bg_color(obj, lv_color_hex(0xff1a1a1a), LV_PART_MAIN | LV_STATE_DEFAULT);
+                                    lv_obj_set_style_radius(obj, 20, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                    lv_obj_set_style_shadow_opa(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                    lv_obj_set_style_border_color(obj, lv_color_hex(0xff252525), LV_PART_MAIN | LV_STATE_DEFAULT);
+                                    lv_obj_set_style_border_opa(obj, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                    lv_obj_set_style_border_width(obj, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                    {
+                                        lv_obj_t *parent_obj = obj;
+                                        {
+                                            lv_obj_t *obj = lv_label_create(parent_obj);
+                                            lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+                                            lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                            lv_obj_set_style_text_font(obj, &lv_font_montserrat_20, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                            lv_obj_set_style_text_color(obj, lv_color_hex(0xfff5c518), LV_PART_MAIN | LV_STATE_DEFAULT);
+                                            lv_obj_set_style_text_align(obj, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                            lv_label_set_text(obj, "CONTROL\nDIGITAL");
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -2364,6 +2389,40 @@ void create_panel_settings_theme_battery_lang_user() {
                         }
                     }
                 }
+                // Battery alert toggle row — mismo patron que Enable Password
+                // (Settings > Usuario): label + switch, checked = alerta habilitada.
+                {
+                    lv_obj_t *obj = lv_obj_create(parent_obj);
+                    lv_obj_set_size(obj, LV_PCT(100), LV_SIZE_CONTENT);
+                    lv_obj_set_style_bg_opa(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_border_width(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_pad_all(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_radius(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_layout(obj, LV_LAYOUT_FLEX, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_flex_flow(obj, LV_FLEX_FLOW_ROW, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_flex_cross_place(obj, LV_FLEX_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_pad_column(obj, 12, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_pad_ver(obj, 14, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_remove_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
+                    {
+                        lv_obj_t *parent_obj = obj;
+                        {
+                            lv_obj_t *obj = lv_label_create(parent_obj);
+                            lv_obj_set_flex_grow(obj, 1);
+                            lv_obj_set_style_text_color(obj, lv_color_hex(0xffaaaaaa), LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_set_style_text_font(obj, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_label_set_text(obj, "Battery Alert");
+                        }
+                        {
+                            lv_obj_t *obj = lv_switch_create(parent_obj);
+                            objects.settings_bat_alert_switch = obj;
+                            lv_obj_set_size(obj, 64, 32); // mas grande que el default de LVGL (~40x20), mas facil de tocar
+                            lv_obj_add_state(obj, LV_STATE_CHECKED); // default: habilitada
+                            lv_obj_set_style_bg_color(obj, lv_color_hex(0xfff5c518), LV_PART_INDICATOR | LV_STATE_CHECKED);
+                            lv_obj_add_event_cb(obj, action_settings_toggle_battery_alert, LV_EVENT_VALUE_CHANGED, (void *)0);
+                        }
+                    }
+                }
             }
         }
         // Language panel (hidden by default)
@@ -2623,6 +2682,7 @@ void create_panel_settings_theme_battery_lang_user() {
                         {
                             lv_obj_t *obj = lv_switch_create(parent_obj);
                             objects.settings_user_pin_switch = obj;
+                            lv_obj_set_size(obj, 64, 32); // mismo tamaño que el switch de Battery Alert
                             lv_obj_set_style_bg_color(obj, lv_color_hex(0xfff5c518), LV_PART_INDICATOR | LV_STATE_CHECKED);
                             lv_obj_add_event_cb(obj, action_settings_toggle_lock_pin, LV_EVENT_VALUE_CHANGED, (void *)0);
                         }
@@ -2670,15 +2730,6 @@ void create_panel_sysinfo_version_guide() {
                     lv_label_set_text(obj, " VERSION INFO");
                 }
                 create_info_row(parent_obj, "Firmware :", "---");
-                {
-                    // Version de firmware de la CONSOLA (llega por UART,
-                    // HMI_REG_FW_VERSION) — fila propia con objeto guardado
-                    // porque se actualiza en vivo (no solo una vez al boot
-                    // como el resto de estas filas), ver apply_fw_version()
-                    // en main.c.
-                    lv_obj_t *row = create_info_row(parent_obj, "Firmware WC :", "---");
-                    objects.sysinfo_console_fw_value = lv_obj_get_child(row, 1);
-                }
                 create_info_row(parent_obj, "Hardware :", "---");
                 create_info_row(parent_obj, "LVGL :", "---");
                 create_info_row(parent_obj, "ESP-IDF :", "---");
@@ -3005,154 +3056,85 @@ void create_panel_settings_camera() {
                     lv_obj_set_style_layout(obj, LV_LAYOUT_FLEX, LV_PART_MAIN | LV_STATE_DEFAULT);
                     lv_obj_set_style_flex_flow(obj, LV_FLEX_FLOW_ROW, LV_PART_MAIN | LV_STATE_DEFAULT);
                     lv_obj_set_style_flex_cross_place(obj, LV_FLEX_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_obj_set_style_pad_column(obj, 22, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_obj_set_style_pad_left(obj, 16, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    // pad_column/pad_left descuentan los 14 px de margen de la
+                    // columna de LEDs (ver abajo), asi los LEDs y botones quedan
+                    // donde estaban (16 y 22 px).
+                    lv_obj_set_style_pad_column(obj, 8, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_pad_left(obj, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
                     lv_obj_remove_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
                     {
                         lv_obj_t *parent_obj = obj;
+                        // Columna de LEDs, uno a la altura de cada boton: verde =
+                        // "Camara delantera", rojo = "Camara trasera". Se prende el
+                        // del boton seleccionado (main.c, camera_rl1_mode_style_update()).
+                        // pad_row 46 = 8 (separacion de botones) + 60 - 22 (alto boton
+                        // - alto LED), asi los centros quedan a 68 px como los botones.
+                        // pad_all 14: margen para que el halo del LED quepa dentro de
+                        // la columna (LVGL recorta lo que se dibuja fuera del padre).
                         {
-                            // LED estatico: siempre en el mismo lugar, con su halo
-                            // normal de lv_led (crece con el brillo, sin recortarse
-                            // porque el cuadro de al lado ya no cambia de tamano —
-                            // ver nota abajo).
-                            lv_obj_t *obj = lv_led_create(parent_obj);
-                            objects.cam_reverse_led = obj;
-                            lv_obj_set_size(obj, 22, 22);
-                            lv_led_set_color(obj, lv_color_hex(0xffe74c3c));
-                            lv_led_set_brightness(obj, 0);
+                            lv_obj_t *leds = lv_obj_create(parent_obj);
+                            lv_obj_set_size(leds, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+                            lv_obj_set_style_bg_opa(leds, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_set_style_border_width(leds, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_set_style_pad_all(leds, 14, LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_set_style_pad_row(leds, 46, LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_set_style_layout(leds, LV_LAYOUT_FLEX, LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_set_style_flex_flow(leds, LV_FLEX_FLOW_COLUMN, LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_remove_flag(leds, LV_OBJ_FLAG_SCROLLABLE);
+                            {
+                                lv_obj_t *obj = lv_led_create(leds);
+                                objects.cam_front_led = obj;
+                                lv_obj_set_size(obj, 22, 22);
+                                lv_led_set_color(obj, lv_color_hex(0xff27ae60));
+                                lv_led_set_brightness(obj, 0);
+                            }
+                            {
+                                lv_obj_t *obj = lv_led_create(leds);
+                                objects.cam_reverse_led = obj;
+                                lv_obj_set_size(obj, 22, 22);
+                                lv_led_set_color(obj, lv_color_hex(0xffe74c3c));
+                                lv_led_set_brightness(obj, 0);
+                            }
                         }
-                        {
-                            // Caja fija (nunca se oculta ni cambia de tamano, para que
-                            // la fila no cambie de alto y el LED de al lado no se corra
-                            // de lugar). El texto es un HIJO centrado con lv_obj_center()
-                            // (centra horizontal Y vertical, a diferencia de text_align
-                            // que solo centra horizontal) para que no quede pegado
-                            // arriba dentro de la caja.
-                            lv_obj_t *box = lv_obj_create(parent_obj);
-                            lv_obj_set_size(box, 220, 46);
-                            lv_obj_set_style_bg_opa(box, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
-                            lv_obj_set_style_bg_color(box, lv_color_hex(0xff2a2a2a), LV_PART_MAIN | LV_STATE_DEFAULT);
-                            lv_obj_set_style_border_width(box, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
-                            lv_obj_set_style_border_side(box, LV_BORDER_SIDE_FULL, LV_PART_MAIN | LV_STATE_DEFAULT);
-                            lv_obj_set_style_border_opa(box, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
-                            lv_obj_set_style_border_color(box, lv_color_hex(0xff3c3c3c), LV_PART_MAIN | LV_STATE_DEFAULT);
-                            lv_obj_set_style_radius(box, 10, LV_PART_MAIN | LV_STATE_DEFAULT);
-                            lv_obj_set_style_pad_all(box, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-                            lv_obj_remove_flag(box, LV_OBJ_FLAG_SCROLLABLE);
-                            // Arranca en gris neutro; solo el COLOR del texto cambia a
-                            // ambar cuando hmi_handle_reg() (main.c) detecta reversa.
-                            lv_obj_t *obj = lv_label_create(box);
-                            objects.cam_reverse_label = obj;
-                            lv_obj_set_style_text_color(obj, lv_color_hex(0xffaaaaaa), LV_PART_MAIN | LV_STATE_DEFAULT);
-                            lv_obj_set_style_text_opa(obj, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
-                            lv_obj_set_style_text_font(obj, &lv_font_montserrat_20, LV_PART_MAIN | LV_STATE_DEFAULT);
-                            lv_obj_set_style_text_align(obj, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                            lv_label_set_text(obj, "CAMARA #2");
-                            lv_obj_center(obj);
-                        }
-                        // Interruptor de 3 posiciones para RL1 (solo reversa):
-                        // ON (fuerza encendido) / OFF (desactivado, no manda
-                        // nada) / AUTO (sigue la reversa, comportamiento de
-                        // siempre). Estilo/logica/estado inicial se cablean
-                        // en main.c (camera_rl1_mode_wire()), aca solo se
-                        // crean los botones.
+                        // Interruptor RL1: "Camara delantera" (OFF, arriba) / "Camara trasera" (ON, abajo). ON
+                        // fuerza encendido, OFF lo apaga. Estilo/logica/estado
+                        // inicial se cablean en main.c (camera_rl1_mode_wire()),
+                        // aca solo se crean los botones.
                         {
                             lv_obj_t *sw = lv_obj_create(parent_obj);
                             lv_obj_set_size(sw, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_bg_opa(sw, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
                             lv_obj_set_style_border_width(sw, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
                             lv_obj_set_style_pad_all(sw, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-                            lv_obj_set_style_pad_column(sw, 6, LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_set_style_pad_row(sw, 8, LV_PART_MAIN | LV_STATE_DEFAULT);
                             lv_obj_set_style_layout(sw, LV_LAYOUT_FLEX, LV_PART_MAIN | LV_STATE_DEFAULT);
-                            lv_obj_set_style_flex_flow(sw, LV_FLEX_FLOW_ROW, LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_set_style_flex_flow(sw, LV_FLEX_FLOW_COLUMN, LV_PART_MAIN | LV_STATE_DEFAULT);
                             lv_obj_remove_flag(sw, LV_OBJ_FLAG_SCROLLABLE);
                             {
                                 lv_obj_t *parent_obj = sw;
                                 {
                                     lv_obj_t *obj = lv_button_create(parent_obj);
-                                    objects.cam_rl1_btn_on = obj;
-                                    lv_obj_set_size(obj, 64, 40);
-                                    lv_obj_set_style_radius(obj, 8, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                    lv_obj_set_style_shadow_opa(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                    lv_obj_t *lbl = lv_label_create(obj);
-                                    lv_obj_set_style_align(lbl, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_16, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                    lv_label_set_text(lbl, "ON");
-                                }
-                                {
-                                    lv_obj_t *obj = lv_button_create(parent_obj);
                                     objects.cam_rl1_btn_off = obj;
-                                    lv_obj_set_size(obj, 64, 40);
+                                    lv_obj_set_size(obj, 280, 60);
                                     lv_obj_set_style_radius(obj, 8, LV_PART_MAIN | LV_STATE_DEFAULT);
                                     lv_obj_set_style_shadow_opa(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
                                     lv_obj_t *lbl = lv_label_create(obj);
                                     lv_obj_set_style_align(lbl, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
                                     lv_obj_set_style_text_font(lbl, &lv_font_montserrat_16, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                    lv_label_set_text(lbl, "OFF");
+                                    lv_label_set_text(lbl, "Camara delantera");
                                 }
                                 {
                                     lv_obj_t *obj = lv_button_create(parent_obj);
-                                    objects.cam_rl1_btn_auto = obj;
-                                    lv_obj_set_size(obj, 64, 40);
+                                    objects.cam_rl1_btn_on = obj;
+                                    lv_obj_set_size(obj, 280, 60);
                                     lv_obj_set_style_radius(obj, 8, LV_PART_MAIN | LV_STATE_DEFAULT);
                                     lv_obj_set_style_shadow_opa(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
                                     lv_obj_t *lbl = lv_label_create(obj);
                                     lv_obj_set_style_align(lbl, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
                                     lv_obj_set_style_text_font(lbl, &lv_font_montserrat_16, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                    lv_label_set_text(lbl, "AUTO");
+                                    lv_label_set_text(lbl, "Camara trasera");
                                 }
                             }
-                        }
-                    }
-                }
-                // Fila LED + cuadro "AVANZANDO" — mismo patron que la de
-                // arriba (RETROCEDIENDO), abajo de esa.
-                {
-                    lv_obj_t *obj = lv_obj_create(parent_obj);
-                    lv_obj_set_size(obj, LV_PCT(100), LV_SIZE_CONTENT);
-                    lv_obj_set_style_bg_opa(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_obj_set_style_border_width(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_obj_set_style_pad_all(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_obj_set_style_layout(obj, LV_LAYOUT_FLEX, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_obj_set_style_flex_flow(obj, LV_FLEX_FLOW_ROW, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_obj_set_style_flex_cross_place(obj, LV_FLEX_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_obj_set_style_pad_column(obj, 22, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_obj_set_style_pad_left(obj, 16, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_obj_remove_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
-                    {
-                        lv_obj_t *parent_obj = obj;
-                        {
-                            // LED estatico, mismo patron que cam_reverse_led — verde
-                            // en vez de ambar, para distinguir de un vistazo.
-                            lv_obj_t *obj = lv_led_create(parent_obj);
-                            objects.cam_forward_led = obj;
-                            lv_obj_set_size(obj, 22, 22);
-                            lv_led_set_color(obj, lv_color_hex(0xff27ae60));
-                            lv_led_set_brightness(obj, 0);
-                        }
-                        {
-                            // Caja fija, mismo patron que la de RETROCEDIENDO.
-                            lv_obj_t *box = lv_obj_create(parent_obj);
-                            lv_obj_set_size(box, 220, 46);
-                            lv_obj_set_style_bg_opa(box, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
-                            lv_obj_set_style_bg_color(box, lv_color_hex(0xff2a2a2a), LV_PART_MAIN | LV_STATE_DEFAULT);
-                            lv_obj_set_style_border_width(box, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
-                            lv_obj_set_style_border_side(box, LV_BORDER_SIDE_FULL, LV_PART_MAIN | LV_STATE_DEFAULT);
-                            lv_obj_set_style_border_opa(box, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
-                            lv_obj_set_style_border_color(box, lv_color_hex(0xff3c3c3c), LV_PART_MAIN | LV_STATE_DEFAULT);
-                            lv_obj_set_style_radius(box, 10, LV_PART_MAIN | LV_STATE_DEFAULT);
-                            lv_obj_set_style_pad_all(box, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-                            lv_obj_remove_flag(box, LV_OBJ_FLAG_SCROLLABLE);
-                            // Arranca en gris neutro; solo el COLOR del texto cambia a
-                            // verde cuando hmi_handle_reg() (main.c) detecta avance.
-                            lv_obj_t *obj = lv_label_create(box);
-                            objects.cam_forward_label = obj;
-                            lv_obj_set_style_text_color(obj, lv_color_hex(0xffaaaaaa), LV_PART_MAIN | LV_STATE_DEFAULT);
-                            lv_obj_set_style_text_opa(obj, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
-                            lv_obj_set_style_text_font(obj, &lv_font_montserrat_20, LV_PART_MAIN | LV_STATE_DEFAULT);
-                            lv_obj_set_style_text_align(obj, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                            lv_label_set_text(obj, "AVANZANDO");
-                            lv_obj_center(obj);
                         }
                     }
                 }
@@ -3758,6 +3740,63 @@ static lv_obj_t *auto_rotation_make_topbar(lv_obj_t *panel_parent, lv_obj_t **ou
     return bar;
 }
 
+// Helper de Control Digital: columna con un titulo arriba y un joystick
+// tactil (base circular + perilla) debajo. La base recibe todos los eventos
+// de toque (la perilla no es clickeable, asi no se los "come"); sin
+// SCROLL_CHAIN/GESTURE_BUBBLE, arrastrar ahi no desplaza pestanas ni pantalla.
+static lv_obj_t *control_digital_make_joystick(lv_obj_t *parent, const char *caption_txt,
+                                          lv_obj_t **out_caption, lv_obj_t **out_base,
+                                          lv_obj_t **out_knob, lv_event_cb_t cb) {
+    lv_obj_t *col = lv_obj_create(parent);
+    // Ancho fijo: el estado de abajo cambia de largo (DETENIDO / IZQUIERDA
+    // 100%) y no debe correr el joystick.
+    lv_obj_set_size(col, 250, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(col, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_width(col, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_all(col, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_row(col, 6, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_layout(col, LV_LAYOUT_FLEX, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_flex_flow(col, LV_FLEX_FLOW_COLUMN, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_flex_cross_place(col, LV_FLEX_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_remove_flag(col, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *cap = lv_label_create(col);
+    *out_caption = cap;
+    lv_obj_set_style_text_font(cap, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_color(cap, lv_color_hex(0xfff5c518), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_label_set_text(cap, caption_txt);
+
+    lv_obj_t *base = lv_obj_create(col);
+    *out_base = base;
+    lv_obj_set_size(base, 176, 176);
+    lv_obj_set_style_radius(base, LV_RADIUS_CIRCLE, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_color(base, lv_color_hex(0xff1a1a1a), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_opa(base, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_color(base, lv_color_hex(0xfff5c518), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_width(base, 4, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_opa(base, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_all(base, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_shadow_opa(base, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_remove_flag(base, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(base, LV_OBJ_FLAG_SCROLL_CHAIN);
+    lv_obj_remove_flag(base, LV_OBJ_FLAG_GESTURE_BUBBLE);
+    lv_obj_add_flag(base, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(base, cb, LV_EVENT_ALL, (void *)0);
+
+    lv_obj_t *knob = lv_obj_create(base);
+    *out_knob = knob;
+    lv_obj_set_size(knob, 56, 56);
+    lv_obj_set_style_radius(knob, LV_RADIUS_CIRCLE, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_color(knob, lv_color_hex(0xfff5c518), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_opa(knob, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_width(knob, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_shadow_opa(knob, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_remove_flag(knob, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(knob, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(knob, LV_ALIGN_CENTER, 0, 0);
+    return col; // para agregar el estado debajo del joystick
+}
+
 void create_panel_modes_auto_rotation() {
     // ---- Control por Puntos ----
     {
@@ -4278,6 +4317,154 @@ void create_panel_modes_auto_rotation() {
                       lv_obj_set_style_text_color(lbl, lv_color_hex(0xff000000), LV_PART_MAIN | LV_STATE_DEFAULT);
                       lv_label_set_text(lbl, LV_SYMBOL_SAVE " Guardar punto"); }
                 }
+            }
+        }
+    }
+
+    // ---- Control Digital: joystick tactil (arriba/abajo = cabeza,
+    // izq/der = cuello). Solo se crean los objetos; el arrastre y el envio
+    // de angulos los maneja cd_joystick_event_cb() en main.c. ----
+    {
+        lv_obj_t *obj = lv_obj_create(objects.paneo);
+        objects.modes_control_digital_panel = obj;
+        lv_obj_set_size(obj, LV_PCT(100), LV_PCT(100));
+        lv_obj_set_style_bg_opa(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_border_width(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_pad_all(obj, 10, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_layout(obj, LV_LAYOUT_FLEX, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_flex_flow(obj, LV_FLEX_FLOW_COLUMN, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_pad_row(obj, 10, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_remove_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
+        {
+            lv_obj_t *panel = obj;
+            auto_rotation_make_topbar(panel, &objects.cd_title_label, " CONTROL DIGITAL",
+                                       cd_btn_volver_cb, &objects.cd_btn_volver);
+            // Cuerpo: joystick MOTOR (izq) | estado + Centrar (centro) |
+            // joystick CABEZA/CUELLO (der), joysticks pegados a los costados.
+            lv_obj_t *body = lv_obj_create(panel);
+            lv_obj_set_width(body, LV_PCT(100));
+            lv_obj_set_flex_grow(body, 1);
+            lv_obj_set_style_bg_opa(body, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_border_width(body, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_pad_all(body, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_layout(body, LV_LAYOUT_FLEX, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_flex_flow(body, LV_FLEX_FLOW_ROW, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_flex_main_place(body, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_flex_cross_place(body, LV_FLEX_ALIGN_START,  LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_remove_flag(body, LV_OBJ_FLAG_SCROLLABLE);
+            {
+                // Izquierda: joystick MOTOR y debajo su estado.
+                lv_obj_t *col = control_digital_make_joystick(body, "MOTOR", &objects.cd_motor_caption,
+                                                              &objects.cd_motor_base, &objects.cd_motor_knob, cd_motor_event_cb);
+                lv_obj_t *lbl = lv_label_create(col);
+                objects.cd_motor_label = lbl;
+                lv_obj_set_width(lbl, LV_PCT(100));
+                lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+                lv_obj_set_style_text_font(lbl, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
+                lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
+                lv_label_set_text(lbl, "MOTOR: DETENIDO");
+            }
+            {
+                // Centro: boton Centrar.
+                lv_obj_t *info = lv_obj_create(body);
+                lv_obj_set_size(info, LV_SIZE_CONTENT, LV_PCT(100)); // alto completo + centrado vertical
+                lv_obj_set_style_bg_opa(info, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+                lv_obj_set_style_border_width(info, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+                lv_obj_set_style_pad_all(info, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+                lv_obj_set_style_pad_row(info, 14, LV_PART_MAIN | LV_STATE_DEFAULT);
+                lv_obj_set_style_layout(info, LV_LAYOUT_FLEX, LV_PART_MAIN | LV_STATE_DEFAULT);
+                lv_obj_set_style_flex_flow(info, LV_FLEX_FLOW_COLUMN, LV_PART_MAIN | LV_STATE_DEFAULT);
+                lv_obj_set_style_flex_cross_place(info, LV_FLEX_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+                lv_obj_set_style_flex_main_place(info, LV_FLEX_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+                lv_obj_remove_flag(info, LV_OBJ_FLAG_SCROLLABLE);
+                {
+                    // Centrar: lleva cabeza/cuello suave al centro guardado
+                    // (cd_btn_centrar_cb en main.c).
+                    lv_obj_t *obj = lv_button_create(info);
+                    objects.cd_btn_centrar = obj;
+                    lv_obj_set_size(obj, 200, 52);
+                    lv_obj_add_event_cb(obj, cd_btn_centrar_cb, LV_EVENT_CLICKED, (void *)0);
+                    lv_obj_set_style_radius(obj, 10, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_shadow_opa(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_bg_color(obj, lv_color_hex(0xfff5c518), LV_PART_MAIN | LV_STATE_DEFAULT);
+                    // Fila invertida: el label queda como hijo 0 (lang_apply usa CLBL)
+                    // pero se dibuja a la derecha del icono.
+                    lv_obj_set_style_layout(obj, LV_LAYOUT_FLEX, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_flex_flow(obj, LV_FLEX_FLOW_ROW_REVERSE, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_flex_main_place(obj, LV_FLEX_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_flex_cross_place(obj, LV_FLEX_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_flex_track_place(obj, LV_FLEX_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_pad_column(obj, 10, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_t *lbl = lv_label_create(obj);
+                    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_text_color(lbl, lv_color_hex(0xff000000), LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_label_set_text(lbl, "Centrar");
+                    {
+                        // Icono de centrado dibujado: anillo + punto central.
+                        lv_obj_t *ico = lv_obj_create(obj);
+                        lv_obj_set_size(ico, 24, 24);
+                        lv_obj_set_style_bg_opa(ico, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+                        lv_obj_set_style_border_width(ico, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+                        lv_obj_set_style_pad_all(ico, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+                        lv_obj_remove_flag(ico, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+                        lv_obj_t *ring = lv_obj_create(ico);
+                        lv_obj_set_size(ring, 20, 20);
+                        lv_obj_center(ring);
+                        lv_obj_set_style_radius(ring, LV_RADIUS_CIRCLE, LV_PART_MAIN | LV_STATE_DEFAULT);
+                        lv_obj_set_style_bg_opa(ring, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+                        lv_obj_set_style_border_width(ring, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
+                        lv_obj_set_style_border_color(ring, lv_color_hex(0xff000000), LV_PART_MAIN | LV_STATE_DEFAULT);
+                        lv_obj_remove_flag(ring, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+                        static const struct { int8_t w, h; lv_align_t al; } parts[] = {
+                            { 6, 6, LV_ALIGN_CENTER },        // punto central
+                        };
+                        for (unsigned i = 0; i < sizeof(parts) / sizeof(parts[0]); i++) {
+                            lv_obj_t *p = lv_obj_create(ico);
+                            lv_obj_set_size(p, parts[i].w, parts[i].h);
+                            lv_obj_align(p, parts[i].al, 0, 0);
+                            lv_obj_set_style_radius(p, i == 0 ? LV_RADIUS_CIRCLE : 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_set_style_border_width(p, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_set_style_bg_opa(p, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_set_style_bg_color(p, lv_color_hex(0xff000000), LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_remove_flag(p, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+                        }
+                    }
+                }
+            }
+            {
+                // Derecha: joystick CABEZA/CUELLO y debajo los angulos.
+                lv_obj_t *col = control_digital_make_joystick(body, "CABEZA / CUELLO", &objects.cd_servo_caption,
+                                                              &objects.cd_joy_base, &objects.cd_joy_knob, cd_joystick_event_cb);
+                lv_obj_t **outs[2] = { &objects.cd_head_label, &objects.cd_neck_label };
+                const char *txt[2] = { "Cabeza: 090\xC2\xB0", "Cuello: 090\xC2\xB0" };
+                for (int i = 0; i < 2; i++) {
+                    lv_obj_t *lbl = lv_label_create(col);
+                    *outs[i] = lbl;
+                    lv_obj_set_width(lbl, LV_PCT(100));
+                    lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_label_set_text(lbl, txt[i]);
+                }
+            }
+            {
+                // Centrar flotante: abajo, entre el centro y los angulos de
+                // cabeza/cuello. Se mueve al cuerpo despues de crear el joystick
+                // derecho para quedar encima (si no, la columna le roba el toque).
+                lv_obj_t *btn  = objects.cd_btn_centrar;
+                lv_obj_t *info = lv_obj_get_parent(btn);
+                lv_obj_set_parent(btn, body);
+                lv_obj_delete(info);
+                lv_obj_add_flag(btn, LV_OBJ_FLAG_FLOATING);
+                // Boton circular (70 px, algo mayor que la perilla del joystick),
+                // solo con el icono de mira. El label (hijo 0, lo usa CLBL en
+                // lang_apply) se conserva pero oculto.
+                lv_obj_set_size(btn, 70, 70);
+                lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, LV_PART_MAIN | LV_STATE_DEFAULT);
+                lv_obj_set_style_pad_all(btn, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+                lv_obj_add_flag(lv_obj_get_child(btn, 0), LV_OBJ_FLAG_HIDDEN);
+                lv_obj_align(btn, LV_ALIGN_TOP_MID, 93, 175);
             }
         }
     }

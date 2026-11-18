@@ -36,6 +36,7 @@ extern void action_settings_theme_classic(lv_event_t *e);
 extern void action_settings_theme_light(lv_event_t *e);
 extern void action_settings_bat_voltage(lv_event_t *e);
 extern void action_settings_bat_percent(lv_event_t *e);
+extern void action_settings_toggle_battery_alert(lv_event_t *e);
 extern void action_settings_btn_language(lv_event_t *e);
 extern void action_lang_es(lv_event_t *e);
 extern void action_lang_en(lv_event_t *e);

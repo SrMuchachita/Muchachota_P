@@ -198,14 +198,16 @@ void action_angle_head_label_pressed(lv_event_t *e) {
     hmi_send_data(HMI_REG_ANGLE_HEAD_CHANGED, value);
 }
 
+// La demo la ejecuta el HMI (secuencia de LED/cabeza/cuello, ver
+// hmi_demo_start() en main.c) — ya no se manda HMI_REG_START/STOP_DEMO.
 void action_btn_start_demo(lv_event_t *e) {
-    // TODO: Implement action btn_start_demo here
-    hmi_send_data(HMI_REG_START_DEMO, 1);
+    (void)e;
+    hmi_demo_start();
 }
 
 void action_btn_stop_demo(lv_event_t *e) {
-    // TODO: Implement action btn_stop_demo here
-    hmi_send_data(HMI_REG_STOP_DEMO, 1);
+    (void)e;
+    hmi_demo_stop();
 }
 
 /* ================================================================
@@ -1240,6 +1242,13 @@ void action_settings_bat_percent(lv_event_t *e) {
     if (objects.console_voltage_caption)
         lv_label_set_text(objects.console_voltage_caption, g_lang->lbl_console_percent);
     hmi_ui_prefs_save_bat_display(1);
+}
+
+void action_settings_toggle_battery_alert(lv_event_t *e) {
+    lv_obj_t *sw = lv_event_get_target(e);
+    bool checked = lv_obj_has_state(sw, LV_STATE_CHECKED);
+    g_battery_alert_enabled = checked ? 1 : 0;
+    hmi_ui_prefs_save_battery_alert(checked ? 1 : 0);
 }
 
 /* Public entry point — call once after create_screens() to boot the theme */

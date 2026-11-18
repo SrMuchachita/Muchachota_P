@@ -93,6 +93,12 @@ void hmi_log(log_type_t type, const char *msg);
 // 0 = mostrar voltaje (V), 1 = mostrar porcentaje (%)
 extern uint8_t g_bat_display_percent;
 
+// 1 = alerta de bateria del robot habilitada (texto + parpadeo cuando esta
+// critica, ver HMI_REG_ROBOT_VOLTAGE en main.c), 0 = deshabilitada (la
+// barra/numero de bateria se siguen actualizando y coloreando normal, solo
+// se suprime el texto de alerta y el parpadeo). Toggle en Settings>Battery.
+extern uint8_t g_battery_alert_enabled;
+
 // Actualiza el valor crudo de pulsos del encoder y refresca su label en
 // GENERAL CONTROLS respetando el modo de visualizacion actual (pulsos/metros).
 void hmi_encoder_set_raw(int32_t raw_pulses);
@@ -107,6 +113,11 @@ void hmi_encoder_reset(void);
 // cambio de brillo del LED del robot, sea local (slider) o remoto
 // (HMI_REG_ROBOT_LED_CHANGED).
 void hmi_bigview_led_level_refresh(void);
+
+// Demo de MODES (INICIAR/DETENER DEMO): secuencia suave de LED, cabeza y
+// cuello que corre el propio HMI — ver main.c.
+void hmi_demo_start(void);
+void hmi_demo_stop(void);
 
 // Callbacks de los widgets de Settings>Encoder y SystemInfo>Update — los
 // widgets ahora se crean en ui/screens.c (junto con los demas submenus),
@@ -133,9 +144,11 @@ void enc_settings_load_from_nvs(void);
 void hmi_ui_prefs_save_theme(int theme_idx);
 void hmi_ui_prefs_save_lang(int lang_id);
 void hmi_ui_prefs_save_bat_display(int percent);
+void hmi_ui_prefs_save_battery_alert(int enabled);
 int  hmi_ui_prefs_load_theme(void);       // default 1 (Classic)
 int  hmi_ui_prefs_load_lang(void);        // default 0 (ES)
 int  hmi_ui_prefs_load_bat_display(void); // default 0 (voltaje)
+int  hmi_ui_prefs_load_battery_alert(void); // default 1 (habilitada)
 
 // ================================================================
 // Giro Automatico personalizado — "Control por Puntos" / "Config Auto
@@ -159,6 +172,18 @@ void modes_btn_stop_giro_automatico_cb(lv_event_t *e); // Cancelar
 // action_angle_*_btn_* de siempre; solo estos dos son nuevos.
 void cp_btn_guardar_centrado_cb(lv_event_t *e);
 void cp_btn_volver_cb(lv_event_t *e);
+
+// Control Digital — joystick tactil de cabeza/cuello (MODES)
+void modes_btn_control_digital_cb(lv_event_t *e);
+void cd_btn_volver_cb(lv_event_t *e);
+void cd_joystick_event_cb(lv_event_t *e);
+void cd_btn_centrar_cb(lv_event_t *e);
+// Multitouch (GT911): todos los dedos en coordenadas de pantalla. En el
+// simulador no hay multitouch (supported = false, 0 puntos).
+bool hmi_touch_multi_supported(void);
+uint8_t hmi_touch_get_points(lv_point_t *pts, uint8_t max);
+void cd_motor_event_cb(lv_event_t *e);   // joystick del motor (HMI_REG_MOTOR)
+void hmi_control_digital_motor_label_refresh(void); // "Motor: <estado>" (lo llama lang.c al cambiar de idioma)
 
 // Config Auto Rotation — selector de recorrido
 void autorot_btn_recorrido1_cb(lv_event_t *e);

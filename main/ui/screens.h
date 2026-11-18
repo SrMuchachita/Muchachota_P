@@ -77,6 +77,22 @@ typedef struct _objects_t {
     lv_obj_t *btn_control_por_puntos;
     lv_obj_t *btn_config_auto_rotation;
     lv_obj_t *btn_stop_giro_automatico;
+    lv_obj_t *btn_control_digital;
+    // Control Digital (pantalla completa, dentro de MODES): joystick tactil
+    // para cabeza (arriba/abajo) y cuello (izq/der). Logica en main.c.
+    lv_obj_t *modes_control_digital_panel;
+    lv_obj_t *cd_title_label;
+    lv_obj_t *cd_btn_volver;
+    lv_obj_t *cd_joy_base;
+    lv_obj_t *cd_joy_knob;
+    lv_obj_t *cd_head_label;
+    lv_obj_t *cd_neck_label;
+    lv_obj_t *cd_btn_centrar;
+    lv_obj_t *cd_motor_base;
+    lv_obj_t *cd_motor_knob;
+    lv_obj_t *cd_motor_caption;
+    lv_obj_t *cd_servo_caption;
+    lv_obj_t *cd_motor_label;
     // Control por Puntos (pantalla completa, dentro de MODES) — reutiliza
     // los paneles angle_neck/angle_head ORIGINALES via reparent, no crea
     // copias nuevas (ver create_panel_modes_auto_rotation en screens.c).
@@ -156,7 +172,6 @@ typedef struct _objects_t {
     lv_obj_t *console_wifi_toggle_btn;
     lv_obj_t *sysinfo_robot_serial_value;
     lv_obj_t *sysinfo_console_serial_value;
-    lv_obj_t *sysinfo_console_fw_value;
     lv_obj_t *sysinfo_device_name_value;
     lv_obj_t *settings_btn_brightness;
     lv_obj_t *settings_btn_theme;
@@ -169,6 +184,7 @@ typedef struct _objects_t {
     lv_obj_t *settings_btn_theme_light;
     lv_obj_t *settings_btn_bat_voltage;
     lv_obj_t *settings_btn_bat_percent;
+    lv_obj_t *settings_bat_alert_switch;
     lv_obj_t *settings_btn_language;
     lv_obj_t *settings_content_language;
     lv_obj_t *lang_btn_es;
@@ -189,13 +205,9 @@ typedef struct _objects_t {
     lv_obj_t *tech_btn_b;
     lv_obj_t *settings_btn_camera;
     lv_obj_t *settings_content_camera;
-    lv_obj_t *cam_reverse_led;
-    lv_obj_t *cam_reverse_label;
-    lv_obj_t *cam_forward_led;
-    lv_obj_t *cam_forward_label;
-    lv_obj_t *cam_rl1_btn_on;
+    lv_obj_t *cam_front_led;
+    lv_obj_t *cam_reverse_led;    lv_obj_t *cam_rl1_btn_on;
     lv_obj_t *cam_rl1_btn_off;
-    lv_obj_t *cam_rl1_btn_auto;
     lv_obj_t *settings_btn_bluetooth;
     lv_obj_t *settings_content_bluetooth;
     lv_obj_t *bt_panel_led;

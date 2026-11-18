@@ -49,6 +49,11 @@ void ui_init() {
     lang_set((lang_id_t)hmi_ui_prefs_load_lang());
     lang_apply();
     g_bat_display_percent = (uint8_t)hmi_ui_prefs_load_bat_display();
+    g_battery_alert_enabled = (uint8_t)hmi_ui_prefs_load_battery_alert();
+    if (objects.settings_bat_alert_switch) {
+        if (g_battery_alert_enabled) lv_obj_add_state(objects.settings_bat_alert_switch, LV_STATE_CHECKED);
+        else                         lv_obj_remove_state(objects.settings_bat_alert_switch, LV_STATE_CHECKED);
+    }
     hmi_theme_apply(hmi_ui_prefs_load_theme()); /* aplica tema + reflejalo en los botones de bateria/idioma */
     loadScreen(SCREEN_ID_MAIN);
 }
