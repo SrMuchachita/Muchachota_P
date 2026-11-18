@@ -936,6 +936,9 @@ void hmi_send_data(uint8_t reg, int32_t value)
             sim_log("HMI: Motor cmd=%d vel=%d", (int)cmd, (int)vel);
             break;
         }
+        case HMI_REG_IMU_ZERO: // la consola real re-captura el cero del IMU
+            sim_log("HMI: IMU re-nivelar (0x30) = %d", (int)value);
+            break;
         default:
             // Resto de registros (BLE, wifi, idioma, limites de servo, OTA,
             // ping/pong con la consola, etc.) no tienen equivalente en el

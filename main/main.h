@@ -64,6 +64,7 @@ typedef enum
     // definida todavia del lado del HMI.
     HMI_REG_J1_CAPTURE_EVENT    = 0x2E,
     HMI_REG_J2_CAPTURE_EVENT    = 0x2F,
+    HMI_REG_IMU_ZERO            = 0x30, // HMI -> Consola: 1 = re-capturar la lectura actual del IMU como nuevo cero (ANG X/Y)
     HMI_CMD_MAX
 } hmi_reg_t;
 
@@ -178,6 +179,7 @@ void modes_btn_control_digital_cb(lv_event_t *e);
 void cd_btn_volver_cb(lv_event_t *e);
 void cd_joystick_event_cb(lv_event_t *e);
 void cd_btn_centrar_cb(lv_event_t *e);
+void imu_zero_label_cb(lv_event_t *e); // tap en ANG X / ANG Y: re-nivelar IMU (HMI_REG_IMU_ZERO)
 // Multitouch (GT911): todos los dedos en coordenadas de pantalla. En el
 // simulador no hay multitouch (supported = false, 0 puntos).
 bool hmi_touch_multi_supported(void);

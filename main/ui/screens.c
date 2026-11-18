@@ -630,6 +630,9 @@ void create_screen_main() {
                                     lv_obj_set_style_text_font(obj, &lv_font_montserrat_24, LV_PART_MAIN | LV_STATE_DEFAULT);
                                     lv_obj_set_style_text_align(obj, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
                                     lv_label_set_text(obj, "0 °");
+                                    // Tap = re-nivelar el IMU (cero de X e Y, ver imu_zero_label_cb en main.c).
+                                    lv_obj_add_flag(obj, LV_OBJ_FLAG_CLICKABLE);
+                                    lv_obj_add_event_cb(obj, imu_zero_label_cb, LV_EVENT_SHORT_CLICKED, NULL);
                                 }
                                 {
                                     // angle_y
@@ -653,6 +656,9 @@ void create_screen_main() {
                                     lv_obj_set_style_text_font(obj, &lv_font_montserrat_24, LV_PART_MAIN | LV_STATE_DEFAULT);
                                     lv_obj_set_style_text_align(obj, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
                                     lv_label_set_text(obj, "0 °");
+                                    // Tap = re-nivelar el IMU (cero de X e Y, ver imu_zero_label_cb en main.c).
+                                    lv_obj_add_flag(obj, LV_OBJ_FLAG_CLICKABLE);
+                                    lv_obj_add_event_cb(obj, imu_zero_label_cb, LV_EVENT_SHORT_CLICKED, NULL);
                                 }
                             }
                         }

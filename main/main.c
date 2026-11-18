@@ -1942,6 +1942,58 @@ void cp_btn_guardar_centrado_cb(lv_event_t *e)
 
 void cp_btn_volver_cb(lv_event_t *e) { (void)e; modes_show_view(MODES_VIEW_HOME); }
 
+// ---- IMU: re-nivelar tocando ANG X / ANG Y ----
+// Un toque corto en cualquiera de las dos tarjetas TILT (objects.angle_x /
+// angle_y) manda HMI_REG_IMU_ZERO=1: la consola toma la lectura actual del
+// IMU como nuevo cero (pitch y roll juntos) y desde ahi manda ANGLE_X/Y
+// relativos. No hay respuesta: la confirmacion es ver 0/0 en el siguiente
+// ciclo (~1 s). Como feedback inmediato, las dos tarjetas se "invierten"
+// IMU_ZERO_FLASH_MS: fondo del color de acento lleno y numero del color de
+// fondo de la tarjeta. Se hace con el estado LV_STATE_USER_1 (los estilos
+// normales no se tocan), asi al terminar vuelven solas a los colores del
+// tema activo (claro/oscuro, ver actions.c).
+#define IMU_ZERO_FLASH_MS 150
+static lv_timer_t *s_imu_zero_flash_timer = NULL;
+
+static void imu_zero_flash_set(bool on)
+{
+    lv_obj_t *lbl[2] = { objects.angle_x, objects.angle_y };
+    for (int i = 0; i < 2; i++) {
+        if (!lbl[i]) continue;
+        if (on) {
+            lv_obj_t *card = lv_obj_get_parent(lbl[i]);
+            lv_color_t txt = card ? lv_obj_get_style_bg_color(card, LV_PART_MAIN) : lv_color_black();
+            lv_obj_set_style_bg_opa(lbl[i], LV_OPA_COVER, LV_PART_MAIN | LV_STATE_USER_1);
+            lv_obj_set_style_text_color(lbl[i], txt, LV_PART_MAIN | LV_STATE_USER_1);
+            lv_obj_add_state(lbl[i], LV_STATE_USER_1);
+        } else {
+            lv_obj_remove_state(lbl[i], LV_STATE_USER_1);
+        }
+    }
+}
+
+static void imu_zero_flash_end_cb(lv_timer_t *t)
+{
+    (void)t;
+    s_imu_zero_flash_timer = NULL; // repeat_count 1: LVGL lo borra solo
+    imu_zero_flash_set(false);
+}
+
+void imu_zero_label_cb(lv_event_t *e)
+{
+    (void)e;
+    hmi_send_data(HMI_REG_IMU_ZERO, 1);
+    hmi_log(LOG_TX, "IMU: re-nivelar (cero X/Y)");
+    imu_zero_flash_set(true);
+    if (s_imu_zero_flash_timer) {
+        lv_timer_reset(s_imu_zero_flash_timer);
+    } else {
+        s_imu_zero_flash_timer = lv_timer_create(imu_zero_flash_end_cb, IMU_ZERO_FLASH_MS, NULL);
+        lv_timer_set_repeat_count(s_imu_zero_flash_timer, 1);
+    }
+}
+// ---- fin IMU ----
+
 // ---- Multitouch (GT911, hasta CONFIG_ESP_LCD_TOUCH_MAX_POINTS dedos) ----
 // LVGL solo usa UN dedo (el puntero). Para que Control Digital pueda mover
 // los dos joysticks a la vez se leen todos los dedos que el driver GT911
