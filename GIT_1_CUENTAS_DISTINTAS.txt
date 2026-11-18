@@ -1,0 +1,159 @@
+=====================================================================
+  COMPARTIR CODIGO CON GITHUB - CADA UNO CON SU PROPIA CUENTA
+  (Tu y tu compañero tienen cuentas de GitHub DIFERENTES)
+=====================================================================
+
+Reemplaza a: copiar carpeta -> comprimir -> subir a Drive -> descargar
+-> descomprimir -> borrar la version vieja.
+
+Repositorio de este proyecto:
+  https://github.com/SrMuchachita/Muchachota_P
+
+Herramienta: Visual Studio Code (VS Code), sin escribir comandos.
+
+
+---------------------------------------------------------------------
+PARTE 1 - CONFIGURACION INICIAL (SE HACE UNA SOLA VEZ)
+---------------------------------------------------------------------
+
+>>> TU (dueño del repositorio)
+
+  Paso 1. Pide a tu compañero su usuario de GitHub.
+          Si no tiene cuenta, que la cree gratis en https://github.com
+
+  Paso 2. Dale permiso al repositorio:
+          a) Entra a https://github.com/SrMuchachita/Muchachota_P
+          b) Clic en "Settings" (arriba).
+          c) Menu izquierdo -> "Collaborators".
+          d) Clic en "Add people" -> escribe su usuario -> confirma.
+
+  Paso 3. Sube la version actual del codigo:
+          a) En VS Code: Ctrl + Shift + G (Control de codigo fuente).
+          b) En el cuadro "Mensaje" escribe, por ejemplo:
+             Version actual del HMI
+          c) Clic en el boton azul "Confirmacion".
+             - Si pregunta "No hay cambios staged... ¿agregar todos?"
+               -> elige "Si" (o "Siempre" para que no vuelva a preguntar).
+          d) Clic en el boton azul "Sincronizar cambios".
+          e) Si pregunta "Esta accion extraera e insertara
+             confirmaciones desde y hacia origin/main" -> "Aceptar".
+
+
+>>> TU COMPAÑERO (en su computadora)
+
+  Paso 1. Instalar Git (si no lo tiene):
+          https://git-scm.com/download/win
+          Instalar con todas las opciones por defecto y reiniciar VS Code.
+
+  Paso 2. Aceptar la invitacion:
+          Le llega un correo de GitHub -> clic en "Accept invitation".
+          (Tambien aparece en https://github.com/notifications)
+
+  Paso 3. Iniciar sesion de GitHub en VS Code:
+          Abajo a la izquierda, icono de la persona (Cuentas)
+          -> "Iniciar sesion con GitHub" -> autorizar en el navegador.
+
+  Paso 4. Descargar (clonar) el proyecto:
+          a) En VS Code: Archivo -> Cerrar carpeta.
+          b) Ctrl + Shift + P -> escribir "Git: Clonar" -> Enter.
+          c) Elegir "Clonar desde GitHub".
+          d) Seleccionar SrMuchachita/Muchachota_P
+          e) Elegir la carpeta donde guardarlo (ej. C:\Proyectos).
+          f) Cuando pregunte "¿Abrir el repositorio clonado?" -> "Abrir".
+
+  Listo. Ya tiene todo el codigo. No vuelve a usar Drive.
+
+
+---------------------------------------------------------------------
+PARTE 2 - USO DIARIO (CADA VEZ QUE HAY CAMBIOS)
+---------------------------------------------------------------------
+
+>>> QUIEN HIZO CAMBIOS (tu o tu compañero) - PARA SUBIRLOS:
+
+  1. Ctrl + Shift + G
+  2. Escribir un mensaje claro, ej:
+       v1.0.83 - cambio trama UART de velocidad
+  3. Clic en "Confirmacion".
+  4. Clic en "Sincronizar cambios".
+  5. Avisar al otro: "ya subi".
+
+>>> EL OTRO - PARA RECIBIRLOS:
+
+  1. Abrir la carpeta del proyecto en VS Code.
+  2. Abajo a la izquierda, en la barra azul, al lado de "main",
+     clic en el icono de flechas en circulo (sincronizar).
+
+        ><   main   (flechas en circulo)   <- ese boton
+
+     A veces en lugar del icono salen numeros como "1↓ 0↑":
+     significa que hay 1 cambio para bajar. Mismo clic.
+
+  Solo se transfieren las lineas que cambiaron, no todo el proyecto.
+
+
+---------------------------------------------------------------------
+REGLA DE ORO
+---------------------------------------------------------------------
+
+  ANTES de empezar a trabajar  -> clic en sincronizar (bajar lo nuevo).
+  AL TERMINAR de trabajar      -> Confirmacion -> Sincronizar cambios.
+
+  Pónganse de acuerdo en quien toca que archivo
+  (ej. uno trabaja en screens.c y el otro en actions.c).
+
+
+---------------------------------------------------------------------
+SI SALE UN CONFLICTO
+---------------------------------------------------------------------
+
+Pasa solo si los dos cambiaron LAS MISMAS LINEAS del mismo archivo.
+No se pierde nada. VS Code muestra:
+
+  <<<<<<< Cambio actual (el tuyo)
+      velocidad = 100;
+  =======
+      velocidad = 120;
+  >>>>>>> Cambio entrante (el del otro)
+
+Encima aparecen botones:
+  - "Aceptar cambio actual"    -> te quedas con el tuyo
+  - "Aceptar cambio entrante"  -> te quedas con el del otro
+  - "Aceptar ambos cambios"    -> se quedan los dos
+
+Eliges, guardas (Ctrl + S) y haces Confirmacion -> Sincronizar cambios.
+
+Si cambiaste algo por error y quieres volver a la version de GitHub:
+  Ctrl + Shift + G -> clic derecho en "Cambios"
+  -> "Descartar todos los cambios" -> luego sincronizar.
+
+
+---------------------------------------------------------------------
+VER QUE CAMBIO
+---------------------------------------------------------------------
+
+  - En VS Code: Ctrl + Shift + G -> seccion "Graph" (abajo)
+    -> clic en una confirmacion -> clic en un archivo.
+    Rojo = lo que habia antes, Verde = lo nuevo.
+  - En la web: https://github.com/SrMuchachita/Muchachota_P/commits
+
+
+---------------------------------------------------------------------
+IMPORTANTE: SINCRONIZAR CODIGO NO ES LO MISMO QUE PUBLICAR OTA
+---------------------------------------------------------------------
+
+  Sincronizar (VS Code)  -> sube el CODIGO. NO actualiza los equipos.
+  publish.ps1            -> compila, sube el .bin como Release y cambia
+                            version.json. SI actualiza los equipos (OTA).
+                            (ver COMO_ACTUALIZAR_OTA.txt)
+
+  Orden correcto para publicar una version OTA:
+    1. Clic en sincronizar (bajar lo del compañero).
+    2. Confirmacion -> Sincronizar cambios (subir tu codigo).
+    3. Ejecutar publish.ps1
+
+  Si te saltas el paso 1 y el compañero subio algo, el "git push" del
+  final de publish.ps1 falla: el Release se crea pero version.json no
+  se actualiza y los equipos NO se enteran de la version nueva.
+
+  Sincronizar solo cambia el codigo. Para que llegue a un equipo hay
+  que compilar y flashear (o publicar por OTA).

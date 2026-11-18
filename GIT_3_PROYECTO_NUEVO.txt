@@ -1,0 +1,161 @@
+=====================================================================
+  PROYECTO NUEVO: DESDE CREAR EL CODIGO HASTA COMPARTIRLO EN GITHUB
+=====================================================================
+
+Usalo cuando empieces un proyecto nuevo (otro firmware, otra consola,
+etc.) y quieras compartirlo con tu compañero desde el primer dia.
+
+Herramienta: Visual Studio Code (VS Code), sin escribir comandos.
+
+
+---------------------------------------------------------------------
+PASO 1 - CREAR EL PROYECTO
+---------------------------------------------------------------------
+
+  a) Crea la carpeta del proyecto, ej:  C:\Proyectos\MI_PROYECTO
+     (Para ESP-IDF: Ctrl + Shift + P -> "ESP-IDF: New Project",
+      o copia un ejemplo como siempre lo haces.)
+  b) Abre esa carpeta en VS Code: Archivo -> Abrir carpeta.
+  c) Comprueba que compila antes de subirlo.
+
+
+---------------------------------------------------------------------
+PASO 2 - CREAR EL .gitignore (MUY IMPORTANTE)
+---------------------------------------------------------------------
+
+El .gitignore le dice a Git que archivos NO subir (compilados,
+temporales, carpetas pesadas). Sin el, se subirian cientos de MB de
+la carpeta build.
+
+  a) En la raiz del proyecto crea un archivo llamado:  .gitignore
+     (con el punto al inicio y sin extension)
+  b) Para un proyecto ESP-IDF, como minimo pon esto:
+
+        build/
+        **/build/
+        managed_components/
+        sdkconfig.old
+        *.bin
+        *.elf
+        *.map
+        *.o
+        *.a
+        *.exe
+        *.log
+        *.bak
+        *.tmp
+        .vscode/
+        __pycache__/
+
+     (Puedes copiar el .gitignore del proyecto WP_P_V9_2_UP, que ya
+      esta probado.)
+
+
+---------------------------------------------------------------------
+PASO 3 - CREAR EL REPOSITORIO Y SUBIRLO A GITHUB (TODO DESDE VS CODE)
+---------------------------------------------------------------------
+
+  a) Si no tienes sesion de GitHub en VS Code: abajo a la izquierda,
+     icono de la persona (Cuentas) -> "Iniciar sesion con GitHub".
+  b) Ctrl + Shift + G (Control de codigo fuente).
+  c) Clic en el boton azul "Publicar en GitHub".
+     (Si en cambio dice "Inicializar repositorio", clic ahi primero y
+      luego vuelve a este paso.)
+  d) Elige "Publicar en repositorio PRIVADO"
+     (privado = solo tu y quien tu autorices pueden verlo).
+  e) Te pregunta el nombre del repositorio: deja el de la carpeta o
+     escribe otro (sin espacios, ej: Consola_Robot).
+  f) Te muestra la lista de archivos a subir. Revisa que NO aparezca
+     la carpeta build ni archivos .bin. Si todo esta bien -> "Aceptar".
+  g) Al terminar sale "Publicado correctamente" con un boton
+     "Abrir en GitHub". Listo, el repositorio ya existe.
+
+  Tu link sera:  https://github.com/SrMuchachita/NOMBRE_DEL_REPO
+
+
+---------------------------------------------------------------------
+PASO 4 - QUE TU COMPAÑERO LO DESCARGUE
+---------------------------------------------------------------------
+
+>>> SI USAN LA MISMA CUENTA DE GITHUB
+
+  En la computadora del compañero:
+  1. VS Code -> Archivo -> Cerrar carpeta.
+  2. Ctrl + Shift + P -> "Git: Clonar" -> "Clonar desde GitHub".
+  3. Seleccionar el repositorio nuevo.
+  4. Elegir carpeta -> "Abrir".
+
+>>> SI CADA UNO TIENE SU PROPIA CUENTA
+
+  Tu (dueño):
+  1. Entra a https://github.com/SrMuchachita/NOMBRE_DEL_REPO
+  2. Settings -> Collaborators -> Add people -> usuario del compañero.
+
+  Tu compañero:
+  1. Acepta la invitacion que le llega por correo.
+  2. En VS Code inicia sesion con SU cuenta de GitHub.
+  3. Ctrl + Shift + P -> "Git: Clonar" -> "Clonar desde GitHub"
+     -> elegir el repositorio -> carpeta -> "Abrir".
+
+  (Si no aparece en la lista, puede pegar el link directamente:
+   Ctrl + Shift + P -> "Git: Clonar" -> pegar
+   https://github.com/SrMuchachita/NOMBRE_DEL_REPO.git )
+
+
+---------------------------------------------------------------------
+PASO 5 - USO DIARIO (IGUAL QUE EN CUALQUIER PROYECTO)
+---------------------------------------------------------------------
+
+  PARA SUBIR CAMBIOS:
+    Ctrl + Shift + G -> escribir mensaje -> "Confirmacion"
+    -> "Sincronizar cambios".
+
+  PARA RECIBIR CAMBIOS:
+    Barra azul de abajo a la izquierda, al lado de "main"
+    -> clic en el icono de flechas en circulo (sincronizar).
+
+  REGLA DE ORO:
+    ANTES de trabajar -> sincronizar.
+    AL TERMINAR       -> Confirmacion -> Sincronizar cambios.
+
+  Para mas detalle (conflictos, ver que cambio, etc.) ver:
+    GIT_1_CUENTAS_DISTINTAS.txt  o  GIT_2_MISMA_CUENTA.txt
+
+
+---------------------------------------------------------------------
+EXTRA - SI EL PROYECTO NUEVO TAMBIEN VA A TENER OTA
+---------------------------------------------------------------------
+
+  Puedes copiar el sistema del proyecto WP_P_V9_2_UP:
+    - publish.ps1  (cambiar $ProjectName por el nombre del nuevo .bin)
+    - version.json
+    - La URL OTA_VERSION_URL en el codigo, apuntando al repositorio
+      nuevo:
+      https://raw.githubusercontent.com/SrMuchachita/NOMBRE_DEL_REPO/main/version.json
+
+  OJO: los equipos descargan version.json y el .bin desde GitHub SIN
+  usuario ni contraseña. Eso solo funciona si el repositorio es
+  PUBLICO. Con un repositorio PRIVADO la OTA no funciona.
+  (Muchachota_P es PUBLICO por eso: cualquiera con el link puede ver
+   el codigo.)
+  Si quieres codigo privado + OTA, una opcion es tener DOS
+  repositorios: uno PRIVADO con el codigo y otro PUBLICO solo con
+  version.json y los Releases (.bin).
+
+
+---------------------------------------------------------------------
+ERRORES COMUNES
+---------------------------------------------------------------------
+
+  - Subi la carpeta build por error:
+      Agrega "build/" al .gitignore, luego en la terminal:
+        git rm -r --cached build
+      y haz Confirmacion -> Sincronizar cambios.
+
+  - "Publicar en GitHub" no aparece:
+      Falta iniciar sesion de GitHub en VS Code (Paso 3a) o falta
+      instalar Git (https://git-scm.com/download/win).
+
+  - Mi compañero no ve el repositorio en la lista:
+      Si es otra cuenta, falta invitarlo como colaborador o falta que
+      acepte la invitacion.
