@@ -1118,15 +1118,14 @@ void vTaskHmiRxProcess(void *pvParameters)
 // ni espera el lock de LVGL: si LVGL esta ocupado (render grande, cambio de
 // pantalla, animacion) el PING sigue saliendo igual y la consola no cree que
 // el HMI murio (a los 7 s sin PING hace esp_restart() y pierde el encoder).
-// El ">> PING" del panel de logs se agrega sin esperar: si LVGL esta ocupado
-// en ese momento, la linea queda guardada y aparece en el proximo refresco.
+// El PING no se loguea en el panel de logs (cada 400 ms lo inundaba); el
+// estado de la conexion lo muestra el LED led_hmi_conn.
 void vTaskHmiPing(void *pvParameters)
 {
     (void)pvParameters;
     vTaskDelay(pdMS_TO_TICKS(5000)); // esperar 5 s al boot para que la consola arranque
     while (1) {
         hmi_send_data(HMI_REG_PING, 1);
-        hmi_log_ex(LOG_TX, ">> PING", 0);
 #ifdef DEV_MODE
         dev_serial_add("TX", "PING");
 #endif
@@ -7543,8 +7542,8 @@ void hmi_handle_reg(uint8_t reg, int32_t value)
         s_last_pong_ms  = (uint32_t)(esp_timer_get_time() / 1000ULL);
         s_pong_received = true;
         HMI_LV_SAFE_OBJ(led_hmi_conn, lv_led_set_brightness(led_hmi_conn, 255));
-        ESP_LOGW(TAG, "<<< PONG recibido: comunicacion bidireccional OK");
-        hmi_log(LOG_OK, "PONG OK - bidireccional");
+        // Sin log: llega cada 400 ms (caso normal). El LED y el watchdog
+        // (s_last_pong_ms / HMI_CONN_TIMEOUT_MS) ya indican si la consola responde.
         break;
     }
 
