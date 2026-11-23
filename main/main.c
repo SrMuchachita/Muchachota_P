@@ -1123,7 +1123,14 @@ void vTaskHmiRxProcess(void *pvParameters)
 void vTaskHmiPing(void *pvParameters)
 {
     (void)pvParameters;
-    vTaskDelay(pdMS_TO_TICKS(5000)); // esperar 5 s al boot para que la consola arranque
+
+    // Garantizar 5 s desde el boot antes del primer PING, no 5 s desde que
+    // arranca esta tarea (el lock screen puede atrasar su creacion).
+    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
+    if (now_ms < 5000) {
+        vTaskDelay(pdMS_TO_TICKS(5000 - now_ms));
+    }
+
     while (1) {
         hmi_send_data(HMI_REG_PING, 1);
 #ifdef DEV_MODE
