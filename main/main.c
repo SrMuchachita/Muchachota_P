@@ -190,6 +190,7 @@ void vHardwareInit(void);
 //**************************************PROTOTIPOS DE FUNCIONES DE UTIL*********************************************/
 void hmi_send_data(uint8_t reg, int32_t value);
 void hmi_process_buffer(uint8_t *buffer, uint16_t len);
+static void hmi_rx_drain_backlog(void);
 void hmi_handle_reg(uint8_t reg, int32_t value);
 void hmi_reapply_cached_boot_regs(void);
 static inline uint8_t battery_percent(uint16_t mv);
@@ -720,6 +721,21 @@ void app_main(void)
     vHardwareInit();
     BOOT_MARK("after vHardwareInit");
 
+    // Envio a la consola (TX + PING) desde el arranque: no tocan LVGL ni
+    // procesan frames, asi la consola recibe PING tambien durante el splash
+    // y la pantalla de bloqueo (sin PING, a los 30 s la consola hace soft
+    // recovery y a los ~40 s se reinicia). La RECEPCION (Event/Rx) sigue
+    // arrancando despues del desbloqueo, ver comentario mas abajo (pantalla
+    // celeste). vUartInit() ya corrio dentro de vHardwareInit().
+    xQueueHmiTx = xQueueCreate(50, sizeof(hmi_tx_frame_t));
+    if (xQueueHmiTx == NULL)
+    {
+        ESP_LOGE(TAG, "Error al crear xQueueHmiTx");
+        return;
+    }
+    xTaskCreate(vTaskHmiTransmit, "HMI Tx",   TASK_SIZE, NULL, 5, NULL);
+    xTaskCreate(vTaskHmiPing,     "HMI Ping", TASK_SIZE, NULL, 6, NULL);
+
     // Paso 0: Crear un esp_lcd_panel y opcionalmente un panel_io con esp_lcd APIs
     // Ya esta creado la pantalla arriba
     // Paso 1: Inicializar esp_lv_adapter
@@ -845,36 +861,6 @@ void app_main(void)
     // celeste) en vez de mantenerse quieto. Mismo patron que el splash.
     lcd_set_brightness(0);
 
-    // Colas + tareas UART — REVERTIDO a arrancar aca (justo antes de
-    // ui_init(), como era originalmente) despues de confirmar que
-    // arrancarlas mas temprano (justo tras inicializar el adapter LVGL)
-    // causaba pantalla celeste/reinicio cuando el robot ya estaba
-    // conectado y mandando datos reales desde el arranque. Con el robot
-    // desconectado bootea normal, lo que confirma que era una condicion de
-    // carrera con trafico UART real muy temprano en el boot, no un bug
-    // general. Los valores "unicos" que puedan llegar tarde igual se
-    // cachean y reaplican (ver hmi_reapply_cached_boot_regs).
-    xQueueHmiTx = xQueueCreate(50, sizeof(hmi_tx_frame_t));
-    if (xQueueHmiTx == NULL)
-    {
-        ESP_LOGE(TAG, "Error al crear xQueueHmiTx");
-        return;
-    }
-
-    xQueueHmiRx = xQueueCreate(50, sizeof(hmi_rx_frame_t));
-    if (xQueueHmiRx == NULL)
-    {
-        ESP_LOGE(TAG, "Error al crear xQueueHmiRx");
-        return;
-    }
-
-    xTaskCreate(vTaskHmiTransmit,   "HMI Tx",    TASK_SIZE, NULL, 5, NULL);
-    xTaskCreate(vTaskUartHmiEvents, "HMI Event", TASK_SIZE, NULL, 5, NULL);
-    xTaskCreate(vTaskHmiRxProcess,  "HMI Rx",   TASK_SIZE, NULL, 6, NULL);
-    // PING a la consola en su propia tarea (no toca LVGL ni procesa frames):
-    // se crea despues de xQueueHmiTx, que es por donde sale el PING.
-    xTaskCreate(vTaskHmiPing,       "HMI Ping", TASK_SIZE, NULL, 6, NULL);
-
     // ui_init() construye toda la interfaz (base + paneles ocultos) en un
     // solo pase, dentro de este unico lock. Ver el comentario en ui_init()
     // (ui.c) — cuatro intentos distintos de escalonar esta construccion
@@ -904,6 +890,26 @@ void app_main(void)
 
     panels_startup_init();
     BOOT_MARK("panels_startup_init done");
+
+    // Cola + tareas de RECEPCION UART: arrancan recien aca, con la interfaz
+    // ya armada. Arrancarlas mas temprano (tras inicializar el adapter LVGL)
+    // causaba pantalla celeste/reinicio con el robot conectado mandando datos
+    // desde el arranque (carrera con trafico UART real durante el boot).
+    // Antes, todo lo que la consola mando durante splash + pantalla de
+    // bloqueo (cientos de frames) se procesaba uno por uno y atrasaba ~4 s
+    // el LED de conexion: hmi_rx_drain_backlog() lo compacta (ultimo valor
+    // de cada registro) y lo aplica de una, sin perder registros "unicos".
+    // El ENVIO (xQueueHmiTx, HMI Tx, HMI Ping) ya arranco tras vHardwareInit().
+    xQueueHmiRx = xQueueCreate(50, sizeof(hmi_rx_frame_t));
+    if (xQueueHmiRx == NULL)
+    {
+        ESP_LOGE(TAG, "Error al crear xQueueHmiRx");
+        return;
+    }
+    hmi_rx_drain_backlog();
+    xTaskCreate(vTaskUartHmiEvents, "HMI Event", TASK_SIZE, NULL, 5, NULL);
+    xTaskCreate(vTaskHmiRxProcess,  "HMI Rx",   TASK_SIZE, NULL, 6, NULL);
+    BOOT_MARK("UART RX started");
 
     hmi_log(LOG_OK, "Hardware initialized");
     hmi_log(LOG_OK, "Display ready");
@@ -1028,7 +1034,9 @@ void vTaskUartHmiEvents(void *pvParameters)
                 }
 
                 uart_read_bytes(HMI_UART_PORT, rx_frame.buffer, rx_frame.len, pdMS_TO_TICKS(10));
-                ESP_LOGW(TAG, "[RAW RX] %d bytes: %02X %02X %02X %02X %02X %02X %02X",
+                // DEBUG (no sale con el nivel de log por defecto): con
+                // ESP_LOGW se escribia en el serial por cada bloque recibido.
+                ESP_LOGD(TAG, "[RAW RX] %d bytes: %02X %02X %02X %02X %02X %02X %02X",
                          rx_frame.len,
                          rx_frame.len > 0 ? rx_frame.buffer[0] : 0,
                          rx_frame.len > 1 ? rx_frame.buffer[1] : 0,
@@ -6790,6 +6798,77 @@ void hmi_process_buffer(uint8_t *buffer, uint16_t len)
     }
 }
 
+// Se llama UNA vez, desde app_main, justo antes de crear las tareas de
+// recepcion (con la interfaz ya armada). Lee de una todo lo que la consola
+// mando mientras el HMI no leia (splash + pantalla de bloqueo), se queda con
+// el ULTIMO valor de cada registro y lo aplica en el orden en que llegaron
+// esos ultimos valores (importa p.ej. MAC_HI antes de MAC_LO). Se descartan
+// los registros que no tiene sentido repetir viejos:
+//   - PONG: prenderia el LED con un PONG de hace segundos aunque el cable ya
+//     este desconectado; el PONG real llega en < 400 ms.
+//   - BUTTONS / J1-J2_CAPTURE_EVENT: no ejecutar acciones ni avisos de
+//     botones apretados durante la pantalla de bloqueo.
+static void hmi_rx_drain_backlog(void)
+{
+    static uint8_t  buf[UART_BUFFER_SIZE];
+    static int32_t  last_val[256];
+    static uint16_t last_seq[256];   // 0 = registro no recibido
+
+    // Primero vaciar la cola de eventos: los bytes a los que apuntan se leen
+    // aca abajo. Si entra un evento nuevo despues, la tarea de eventos lo lee
+    // normalmente.
+    xQueueReset(xQueueUartEvent);
+
+    size_t avail = 0;
+    uart_get_buffered_data_len(HMI_UART_PORT, &avail);
+    if (avail > sizeof(buf)) avail = sizeof(buf);
+    int n = (avail > 0) ? uart_read_bytes(HMI_UART_PORT, buf, avail, 0) : 0;
+    if (n <= 0) {
+        ESP_LOGI(TAG, "Backlog UART: vacio");
+        return;
+    }
+
+    memset(last_seq, 0, sizeof(last_seq));
+    uint16_t seq = 0;
+    for (int i = 0; i + 7 <= n; i++) {
+        if (buf[i] == HMI_HEADER_1 && buf[i+1] == HMI_HEADER_2) {
+            uint8_t reg = buf[i+2];
+            last_val[reg] = ((int32_t)buf[i+3] << 24) |
+                            ((int32_t)buf[i+4] << 16) |
+                            ((int32_t)buf[i+5] << 8 ) |
+                            ((int32_t)buf[i+6]);
+            last_seq[reg] = ++seq;
+            i += 6; // saltar al siguiente frame
+        }
+    }
+
+    last_seq[HMI_REG_PONG]             = 0;
+    last_seq[HMI_REG_BUTTONS]          = 0;
+    last_seq[HMI_REG_J1_CAPTURE_EVENT] = 0;
+    last_seq[HMI_REG_J2_CAPTURE_EVENT] = 0;
+
+    // Ordenar los registros recibidos por el orden de su ultimo valor
+    // (son pocos, ~30: insercion simple).
+    uint8_t order[256];
+    int count = 0;
+    for (int r = 0; r < 256; r++) {
+        if (last_seq[r] == 0) continue;
+        int j = count++;
+        while (j > 0 && last_seq[order[j-1]] > last_seq[r]) {
+            order[j] = order[j-1];
+            j--;
+        }
+        order[j] = (uint8_t)r;
+    }
+
+    for (int k = 0; k < count; k++) {
+        hmi_handle_reg(order[k], last_val[order[k]]);
+    }
+
+    ESP_LOGI(TAG, "Backlog UART: %d bytes, %u frames -> %d registros aplicados",
+             n, (unsigned)seq, count);
+}
+
 static bool bat_alert_active = false;
 
 static void bat_blink_anim_cb(void *obj, int32_t opa)
@@ -7706,8 +7785,15 @@ static void hmi_conn_indicator_create(void)
     // Mover a index 1: [verde][amarillo][Online]
     lv_obj_move_to_index(led_hmi_conn, 1);
 
-    // Timer que revisa cada segundo si sigue llegando PONG
-    lv_timer_create(hmi_conn_check_cb, 1000, NULL);
+    // Si la tarea RX ya proceso un PONG mientras se construia la UI,
+    // prender el LED al instante sin esperar al primer tick del timer.
+    if (s_pong_received) {
+        lv_led_set_brightness(led_hmi_conn, 255);
+    }
+
+    // Timer que revisa cada 250 ms si sigue llegando PONG (apaga el LED si
+    // pasan HMI_CONN_TIMEOUT_MS sin PONG; el encendido lo hace el case PONG).
+    lv_timer_create(hmi_conn_check_cb, 250, NULL);
 }
 
 // Repinta el panel de logs. lv_lock_timeout_ms: -1 = esperar el lock de LVGL
