@@ -137,7 +137,6 @@ static const char *const LEVEL_2[] = {
 /* nivel 2: tunel */
 #define C_RING        0x9FB6CC   /* reflejo de luz en los anillos del tubo */
 #define C_TUNNEL_DARK 0x05070A   /* oscuridad arriba/abajo del tubo y en los ramales */
-#define C_TUNNEL_LIGHT 0xC8DAFF  /* luz al final de los ramales */
 #define C_MURKY_DEEP  0x1E2410   /* agua turbia (fondo) */
 
 /* Paleta de los dibujos (letra -> color) */
@@ -364,41 +363,6 @@ static const char *const ART_TEX_WATER[] = {
 };
 
 /* --------------------------- TEXTURAS DEL TUNEL (nivel 2) */
-/* concreto del tunel (pared del fondo, se repite) */
-static const char *const ART_TEX_CONCRETE[] = {
-    "JJJJJJJJjJJJJjJJjJJJJJJJJJJJkJJk",
-    "jkJJJjjJJJJjJJjkJJJJJJJjJjjjJjJJ",
-    "JJJjjJkJjJJJJJJJJJJJJkJJJJJJJJJk",
-    "JJJjJJJJJJJJJJjJJJJJjJkJkJJnJJJJ",
-    "JJJJJkJJJJJJJJjkJJJJJJjJJjJnJJJJ",
-    "JJJJJjJkJJJJJJkJJjJJkJJJjJJnnJJJ",
-    "JJjkJJJkJJJJkkJJkJJkjJJJJjJnnJJj",
-    "JMjjJJkJJjkJJJJjJJJkJJJJjJJnJJkJ",
-    "JjjJJJkJJJjjJjJJJJJJJJjJJjknJJkJ",
-    "JJjJJJJJkJJJJJJJJjJJjJJJJJJnnJJJ",
-    "JJJJjJJJJnnJJkjJJJJJkJJJJJJnnJJJ",
-    "JJjJJJjJJnjJJJJJJJJJjJJJJJJnnJJj",
-    "JJJJJjJJjnnJkjJJJjjJjJJJJJJnnjJJ",
-    "JJJJjJJjJnnJjJJjJkjJJJJJJJjnnJJJ",
-    "JJJjJJJJknnJJJjJkJJjJJJJjJJnnJJJ",
-    "JJJjkJjJjnnJJJJjJjjjJJJJJJJnnJJj",
-    "JJJJJjJJjnnJJJJJJJJJJJJJJkknMjJJ",
-    "JJJJJJJjJnnJJJjjJkJJkJJJJjJnjJJJ",
-    "JJjjjMjJJnJkJJjJJkJJJJjkJJJnjJjk",
-    "JJJJjjJJjnJJJJJJJJJJJJJJJJJnnkJJ",
-    "kJJJJjJJknnJJMjJJJkJJJkjJJJnnJjJ",
-    "kJjJkkJJJnjJkjJkJJJJJjJJJjJnJJJJ",
-    "JJJjjkjJJnJjJJJJjkJjJJjJJJJnnJJj",
-    "jJJJJjJkJnJJJJJJJJkJjJJkJJjnkJJJ",
-    "kJJjJJkJJnnJjJjJJjJjJkjkJkJnnJJJ",
-    "JJJJJJJJJnnJJJJJJJJJJJJjJJjJjjJk",
-    "JJjJJJJjknnJjJJJJJJjjkJjJJkJJJjk",
-    "kJJJkJJkJnnJJJjJjjJkJjMjJJJJJJJJ",
-    "JJJJJjJJJJjJJjJjJJkJjJjJJkJJJJJJ",
-    "JjJJjJJkjJJJJJMjJJJkJJJJJjJJJjJJ",
-    "JJJJJJJJJJJJJJjJJJjJJJJJJkJJJJJJ",
-    "JkJJJJJJJJkkJjJJJJJJJJJJJJJkJkkJ",
-};
 /* piso / techo de concreto del tunel (se repite) */
 static const char *const ART_TEX_CFLOOR[] = {
     "kkkkkkkkkkkkkkkk",
@@ -514,7 +478,7 @@ static sprite_t spr_player[PF_COUNT][2]; /* [cuadro][0=der,1=izq] */
 static sprite_t spr_walk[2][2];          /* [cuadro][dir] */
 static sprite_t spr_turret, spr_coin[2], spr_spikes, spr_heart, spr_heart_empty, spr_puff[2];
 static sprite_t spr_tex_wall, spr_tex_stone, spr_tex_slime, spr_tex_grate, spr_tex_crate, spr_tex_water;
-static sprite_t spr_tex_concrete, spr_tex_cfloor, spr_tex_rubble, spr_tex_water2, spr_debris;
+static sprite_t spr_tex_cfloor, spr_tex_rubble, spr_tex_water2, spr_debris;
 static bool     s_sprites_ready;
 
 static bool pal_lookup(char c, uint32_t *rgb)
@@ -586,7 +550,6 @@ static void sprites_init(void)
     BUILD(spr_tex_grate, ART_TEX_GRATE, 2, false);
     BUILD(spr_tex_crate, ART_TEX_CRATE, 2, false);
     BUILD(spr_tex_water, ART_TEX_WATER, 2, false);
-    BUILD(spr_tex_concrete, ART_TEX_CONCRETE, 2, false);
     BUILD(spr_tex_cfloor,   ART_TEX_CFLOOR,   2, false);
     BUILD(spr_tex_rubble,   ART_TEX_RUBBLE,   2, false);
     BUILD(spr_tex_water2,   ART_TEX_WATER2,   2, false);
@@ -870,50 +833,33 @@ static void build_bg_sewer(void)
 /* NIVEL TUNEL: tubo de concreto visto de costado. Pared de concreto con los
  * anillos de las uniones reflejando luz, y cada tanto un ramal que muestra la
  * vista "hacia adentro" del tubo: anillos que se achican hasta una luz. */
+/* Imagen opaca en flash. Cada repeticion cubre una pantalla completa. */
+static const uint16_t tunnel_bg_pixels[] = {
+#include "game_tunnel_bg.inc"
+};
+_Static_assert(sizeof(tunnel_bg_pixels) == GW * GH * 2, "Tamano del fondo del tunel");
+
+static const sprite_t spr_tunnel_bg = {
+    .dsc = {
+        .header = {
+            .magic = LV_IMAGE_HEADER_MAGIC,
+            .cf = LV_COLOR_FORMAT_RGB565,
+            .w = GW,
+            .h = GH,
+            .stride = GW * 2,
+        },
+        .data_size = sizeof(tunnel_bg_pixels),
+        .data = (const uint8_t *)tunnel_bg_pixels,
+    },
+    .w = GW,
+    .h = GH,
+};
+
 static void build_bg_tunnel(void)
 {
     int far_w = (int)(s_map_w * T * 0.25f) + GW + 200;
     s_far = make_container(s_root, far_w, GH);
-    make_tiled(s_far, &spr_tex_concrete, 0, 0, far_w, GH);
-
-    /* uniones del tubo principal: arcos de luz */
-    for (int x = 80; x < far_w; x += 230) {
-        lv_obj_t *a = make_rect(s_far, x, -120, 110, GH + 240, 0, LV_RADIUS_CIRCLE);
-        lv_obj_set_style_bg_opa(a, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_border_color(a, lv_color_hex(C_RING), 0);
-        lv_obj_set_style_border_width(a, 4, 0);
-        lv_obj_set_style_border_opa(a, 90, 0);
-        lv_obj_set_style_border_side(a, LV_BORDER_SIDE_LEFT, 0);
-        lv_obj_t *s = make_rect(s_far, x + 7, -120, 110, GH + 240, 0, LV_RADIUS_CIRCLE);
-        lv_obj_set_style_bg_opa(s, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_border_color(s, lv_color_hex(C_TUNNEL_DARK), 0);
-        lv_obj_set_style_border_width(s, 4, 0);
-        lv_obj_set_style_border_opa(s, 140, 0);
-        lv_obj_set_style_border_side(s, LV_BORDER_SIDE_LEFT, 0);
-    }
-
-    /* ramales con luz al final */
-    static const uint32_t fill[] = { 0x080B10, 0x0E141C, 0x162130, 0x223447, 0x34506E, 0x4F729A };
-    static const uint8_t  ring_opa[] = { 150, 130, 150, 175, 200, 230 };
-    for (int cx = 330; cx < far_w; cx += 880) {
-        int cy = 236, size = 300;
-        for (int k = 0; k < 6; k++) {
-            lv_obj_t *c = make_rect(s_far, cx - size / 2, cy - size / 2 + k * 6, size, size, fill[k], LV_RADIUS_CIRCLE);
-            lv_obj_set_style_border_color(c, lv_color_hex(C_RING), 0);
-            lv_obj_set_style_border_width(c, k == 0 ? 7 : 3, 0);
-            lv_obj_set_style_border_opa(c, ring_opa[k], 0);
-            size = size * 7 / 10;
-        }
-        lv_obj_t *glow = make_rect(s_far, cx - 34, cy - 34 + 36, 68, 68, C_TUNNEL_LIGHT, LV_RADIUS_CIRCLE);
-        lv_obj_set_style_bg_opa(glow, 120, 0);
-        make_rect(s_far, cx - 12, cy - 12 + 36, 24, 24, 0xFFFFFF, LV_RADIUS_CIRCLE);
-        /* reflejo del agua que sale del ramal */
-        lv_obj_t *wr = make_rect(s_far, cx - 10, cy + 60, 20, 90, C_TUNNEL_LIGHT, 4);
-        lv_obj_set_style_bg_opa(wr, 50, 0);
-    }
-    /* el fondo un poco mas oscuro para que el piso y los escombros resalten */
-    lv_obj_t *dim = make_rect(s_far, 0, 0, far_w, GH, C_TUNNEL_DARK, 0);
-    lv_obj_set_style_bg_opa(dim, 80, 0);
+    make_tiled(s_far, &spr_tunnel_bg, 0, 0, far_w, GH);
 
     /* MEDIO: manchas de oxido/humedad que bajan del techo y goteras */
     int mid_w = (int)(s_map_w * T * 0.5f) + GW + 200;
@@ -962,14 +908,26 @@ static void build_tiles(void)
 {
     bool tunnel = s_theme == THEME_TUNNEL;
     const sprite_t *ground = tunnel ? &spr_tex_cfloor : &spr_tex_stone;
-    const sprite_t *water  = tunnel ? &spr_tex_water2 : &spr_tex_water;
-
-    /* agua a lo largo de todo el nivel (el suelo la tapa donde hay piso) */
-    make_rect(s_world, 0, 13 * T + 12, s_map_w * T, GH - 13 * T - 12, tunnel ? C_MURKY_DEEP : C_WATER_DEEP, 0);
-    s_water = make_tiled(s_world, water, 0, 13 * T + 4, s_map_w * T, water->h);
     s_water_off = 0;
+    if (tunnel) {
+        /* Los huecos siguen siendo profundos y se distinguen del piso inundado. */
+        for (int c = 0; c < s_map_w; ) {
+            if (s_map[13][c] == '#') { c++; continue; }
+            int e = c + 1;
+            while (e < s_map_w && s_map[13][e] != '#') e++;
+            lv_obj_t *pit = make_rect(s_world, c * T, 13 * T, (e - c) * T,
+                                      GH - 13 * T, C_MURKY_DEEP, 0);
+            lv_obj_set_style_bg_opa(pit, LV_OPA_70, 0);
+            c = e;
+        }
+    } else {
+        make_rect(s_world, 0, 13 * T + 12, s_map_w * T, GH - 13 * T - 12, C_WATER_DEEP, 0);
+        s_water = make_tiled(s_world, &spr_tex_water, 0, 13 * T + 4,
+                             s_map_w * T, spr_tex_water.h);
+    }
 
     for (int r = 0; r < MAP_H; r++) {
+        if (tunnel && r >= 13) break; /* el fondo muestra el concreto sumergido */
         int c = 0;
         while (c < s_map_w) {
             char ch = s_map[r][c];
@@ -1151,6 +1109,11 @@ static void load_level(int idx)
     for (int i = 0; i < MAX_PUFF; i++) {
         s_puff[i].obj = make_sprite(s_world, &spr_puff[0]);
         s_puff[i].on = false; show(s_puff[i].obj, false);
+    }
+    if (s_theme == THEME_TUNNEL) {
+        /* Una capa fina delante de los pies marca la superficie del charco. */
+        s_water = make_tiled(s_world, &spr_tex_water2, 0, 13 * T - 4, s_map_w * T, 8);
+        lv_obj_set_style_image_opa(s_water, LV_OPA_30, 0);
     }
     s_cp_x = s_start_x; s_cp_y = s_start_y;
 }
@@ -1489,7 +1452,8 @@ static void update_misc(int dt_ms)
     /* el agua corre y los caños gotean */
     float dt = dt_ms / 1000.0f;
     s_water_off += 24.0f * dt;
-    if (s_water_off >= spr_tex_water.w) s_water_off -= spr_tex_water.w;
+    int water_w = s_theme == THEME_TUNNEL ? spr_tex_water2.w : spr_tex_water.w;
+    if (s_water_off >= water_w) s_water_off -= water_w;
     if (s_water) lv_image_set_offset_x(s_water, (int32_t)s_water_off);
     for (int i = 0; i < s_n_drip; i++) {
         drip_t *d = &s_drip[i];
