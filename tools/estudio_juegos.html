@@ -1,0 +1,777 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Estudio de juegos (local)</title>
+<style>
+  :root { color-scheme: dark; --bg:#12141a; --panel:#181b22; --line:#2c313c; --txt:#e6e6e6; --dim:#9aa0aa; --acc:#e6b800; }
+  * { box-sizing:border-box; }
+  [hidden] { display:none !important; }
+  body { font-family: system-ui, sans-serif; background:var(--bg); color:var(--txt); margin:0; }
+  header { display:flex; align-items:center; gap:10px; padding:12px 18px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  header h1 { font-size:18px; margin:0 12px 0 0; }
+  #fileName { color:var(--dim); font-size:13px; }
+  #status { color:var(--dim); font-size:13px; margin-left:auto; max-width:520px; }
+  #status.ok { color:#7fe08a; } #status.err { color:#ff8a7a; }
+  button { background:#2c313c; color:var(--txt); border:none; border-radius:6px; padding:7px 12px; font-size:13px; cursor:pointer; }
+  button:hover { background:#3a404d; }
+  button.primary { background:var(--acc); color:#1a1a1a; font-weight:600; }
+  button.primary:hover { background:#ffcc1a; }
+  button.on { outline:2px solid var(--acc); }
+  button:disabled { opacity:.45; cursor:default; }
+  nav { display:flex; gap:4px; padding:0 18px; border-bottom:1px solid var(--line); }
+  nav button { background:none; border-radius:0; padding:10px 16px; color:var(--dim); border-bottom:2px solid transparent; }
+  nav button.active { color:var(--acc); border-bottom-color:var(--acc); }
+  main { padding:16px 18px; }
+  .tab { display:none; } .tab.active { display:block; }
+  .empty { color:var(--dim); padding:40px; text-align:center; font-size:15px; line-height:1.7; }
+  .cols { display:flex; gap:16px; align-items:flex-start; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; }
+  .panel h3 { font-size:13px; margin:0 0 8px; color:var(--dim); font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
+  .hint { color:var(--dim); font-size:12px; line-height:1.5; }
+  .row { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin:6px 0; }
+  label.s { font-size:12px; color:var(--dim); }
+  input[type=text], input[type=number], select { background:#1b1e26; border:1px solid #333846; color:var(--txt); border-radius:5px; padding:6px 8px; font-size:13px; }
+  canvas { image-rendering:pixelated; display:block; }
+  /* figuras */
+  #spriteList { width:230px; max-height:calc(100vh - 150px); overflow:auto; }
+  .group { margin-bottom:10px; }
+  .group .gname { font-size:12px; color:var(--dim); margin-bottom:4px; }
+  .thumbs { display:flex; gap:6px; flex-wrap:wrap; }
+  .thumb { background:#0c0d10; border:2px solid transparent; border-radius:5px; padding:4px; cursor:pointer; }
+  .thumb.sel { border-color:var(--acc); }
+  .thumb .tn { font-size:10px; color:var(--dim); text-align:center; margin-top:2px; max-width:80px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #editorWrap { flex:1; min-width:0; }
+  #editCanvas { background:#0c0d10; border:1px solid var(--line); cursor:crosshair; margin-top:8px; }
+  #side { width:270px; }
+  .swatches { display:grid; grid-template-columns:repeat(4, 1fr); gap:6px; }
+  .sw { border:2px solid transparent; border-radius:6px; padding:3px; cursor:pointer; background:#0c0d10; text-align:center; font:600 12px Consolas,monospace; }
+  .sw.sel { border-color:var(--acc); }
+  .sw .chip { height:22px; border-radius:3px; margin-bottom:2px; }
+  .sw.transp .chip { background: repeating-conic-gradient(#555 0 25%, #333 0 50%) 0 0/10px 10px; }
+  #colorEdit { width:100%; height:34px; border:none; background:none; padding:0; }
+  #preview { background:#4A90E2; border-radius:6px; margin:6px 0; }
+  /* nivel */
+  #levelTools { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; }
+  .tile { display:flex; align-items:center; gap:6px; }
+  .tile canvas { background:#0c0d10; border-radius:3px; }
+  #levelScroll { overflow:auto; border:1px solid var(--line); border-radius:6px; max-height:calc(100vh - 260px); background:#000; }
+  #levelCanvas { cursor:crosshair; }
+  #levelWarn { color:#f0c98a; font-size:12px; margin-top:6px; min-height:16px; }
+  /* colores */
+  .clist { display:grid; grid-template-columns:repeat(auto-fill, minmax(230px, 1fr)); gap:8px; }
+  .citem { display:flex; align-items:center; gap:8px; background:#0c0d10; padding:6px 8px; border-radius:6px; }
+  .citem input { width:42px; height:30px; border:none; background:none; padding:0; }
+  .citem .cn { font-size:12px; } .citem .cd { font-size:11px; color:var(--dim); }
+  #worldPreview { border-radius:6px; border:1px solid var(--line); margin-top:12px; }
+  /* textos */
+  .tfield { margin-bottom:14px; max-width:560px; }
+  .tfield input { width:100%; }
+  .bad { color:#ff8a7a; font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🎮 Estudio de juegos</h1>
+  <button class="primary" id="btnOpen">Abrir juego (.c)</button>
+  <input type="file" id="fileInput" accept=".c,.h" style="display:none">
+  <button id="btnSave" disabled>💾 Guardar</button>
+  <button id="btnDownload" disabled>Descargar copia</button>
+  <span id="fileName"></span>
+  <span id="status">Abre (o arrastra aca) main/ui/game_platform.c o main/ui/game_shooter.c</span>
+</header>
+<nav>
+  <button class="active" data-tab="tabSprites">Figuras</button>
+  <button data-tab="tabLevel">Nivel</button>
+  <button data-tab="tabColors">Colores del mundo</button>
+  <button data-tab="tabTexts">Textos</button>
+</nav>
+<main>
+  <div class="empty" id="emptyMsg">
+    1. Pulsa <b>Abrir juego (.c)</b> y elige <code>main/ui/game_platform.c</code> (o <code>game_shooter.c</code>)
+       — o <b>arrastra ese archivo</b> a esta pagina.<br>
+    2. Edita figuras, nivel, colores y textos con el mouse.<br>
+    3. Pulsa <b>Guardar</b> (en Chrome/Edge guarda directo en el archivo).<br>
+    4. Compila el simulador (<code>mingw32-make</code> en <code>sim/build</code>) y abre <code>sim.exe</code> para jugarlo.
+  </div>
+
+  <!-- ===================== FIGURAS ===================== -->
+  <section class="tab active" id="tabSprites" hidden>
+    <div class="cols">
+      <div class="panel" id="spriteList"><h3>Figuras</h3><div id="groups"></div></div>
+      <div class="panel" id="editorWrap">
+        <h3 id="editTitle">—</h3>
+        <div class="row">
+          <button data-tool="pen" class="on">✏️ Lapiz</button>
+          <button data-tool="erase">🧽 Borrar</button>
+          <button data-tool="fill">🪣 Rellenar</button>
+          <button data-tool="pick">💧 Gotero</button>
+          <span style="width:10px"></span>
+          <label class="s">Zoom</label>
+          <input type="range" id="zoom" min="8" max="40" value="22">
+          <button id="btnUndo" title="Ctrl+Z">↶ Deshacer</button>
+        </div>
+        <div class="row">
+          <label class="s">Tamaño:</label> <b id="sizeLbl"></b>
+          <button data-resize="addL">+col ⬅</button><button data-resize="addR">+col ➡</button>
+          <button data-resize="delL">−col ⬅</button><button data-resize="delR">−col ➡</button>
+          <button data-resize="addT">+fila ⬆</button><button data-resize="addB">+fila ⬇</button>
+          <button data-resize="delT">−fila ⬆</button><button data-resize="delB">−fila ⬇</button>
+        </div>
+        <div class="row">
+          <button data-op="mirror">⇋ Espejar</button>
+          <button data-op="flipv">⇵ Voltear</button>
+          <button data-op="left">⬅ Mover</button><button data-op="right">Mover ➡</button>
+          <button data-op="up">Mover ⬆</button><button data-op="down">Mover ⬇</button>
+          <button data-op="copy">Copiar figura</button><button data-op="paste">Pegar</button>
+          <button data-op="clear">Limpiar</button>
+          <button id="btnImport">🖼️ Importar PNG…</button>
+          <input type="file" id="pngInput" accept="image/png,image/gif,image/webp" style="display:none">
+          <label class="s"><input type="checkbox" id="addColors" checked> agregar colores nuevos</label>
+        </div>
+        <canvas id="editCanvas"></canvas>
+        <p class="hint">Clic izquierdo pinta, clic derecho borra. Las figuras del jugador y los enemigos se dibujan
+          <b>mirando a la derecha</b>; el juego hace el espejo solo. Importar PNG: dibuja en Piskel/Aseprite a tamaño
+          real (1 pixel = 1 pixel) y exporta PNG con fondo transparente.</p>
+      </div>
+      <div id="side">
+        <div class="panel">
+          <h3>Paleta</h3>
+          <div class="swatches" id="swatches"></div>
+          <div class="row"><input type="color" id="colorEdit" title="Cambiar el color seleccionado"></div>
+          <div class="row"><button id="btnAddColor">+ Nuevo color</button></div>
+          <p class="hint">Cambiar un color lo cambia en <b>todas</b> las figuras que usan esa letra.</p>
+        </div>
+        <div class="panel" style="margin-top:12px">
+          <h3>Vista previa (tamaño en pantalla)</h3>
+          <canvas id="preview" width="246" height="150"></canvas>
+          <div class="row"><label class="s">Escala</label><select id="pvScale"></select>
+            <label class="s">Velocidad</label><input type="range" id="pvFps" min="1" max="15" value="6" style="width:80px"></div>
+          <p class="hint">Anima todos los cuadros de la figura (ej. RUN1 → RUN2). La escala real del juego:
+            plataformas = x2 (corazon/explosion x3), naves = x4.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== NIVEL ===================== -->
+  <section class="tab" id="tabLevel" hidden>
+    <div class="panel">
+      <div class="row">
+        <label class="s">Nivel:</label><select id="levelSel"></select>
+        <label class="s">Zoom</label><input type="range" id="lvZoom" min="8" max="32" value="16">
+        <button id="lvAdd">+10 columnas</button><button id="lvDel">−10 columnas</button>
+        <span class="hint" id="lvInfo"></span>
+      </div>
+      <div id="levelTools"></div>
+      <div id="levelScroll"><canvas id="levelCanvas"></canvas></div>
+      <div id="levelWarn"></div>
+      <p class="hint">Clic izquierdo pinta el bloque elegido, clic derecho borra. Las lineas amarillas marcan
+        cada pantalla (25 bloques = 800 px). Salto caminando ≈ 4 bloques de alto; corriendo ≈ 5.5.</p>
+    </div>
+  </section>
+
+  <!-- ===================== COLORES ===================== -->
+  <section class="tab" id="tabColors" hidden>
+    <div class="panel">
+      <h3>Colores del fondo, bloques y disparos</h3>
+      <div class="clist" id="clist"></div>
+      <canvas id="worldPreview" width="800" height="300"></canvas>
+    </div>
+  </section>
+
+  <!-- ===================== TEXTOS ===================== -->
+  <section class="tab" id="tabTexts" hidden>
+    <div class="panel" id="texts"></div>
+  </section>
+</main>
+
+<script>
+'use strict';
+// ============================== estado ==============================
+let src = '', fileHandle = null, fileName = '', dirty = false;
+let palette = [];            // [{k:'R', rgb:'E0302A'}]
+let arts = {}, artOrder = [];// nombre -> [filas]
+let levels = {}, levelOrder = [];
+let defines = {};            // C_XXX -> 'RRGGBB'
+let texts = {};              // GAME_TITLE -> '...'
+let curArt = null, curLevel = null;
+let tool = 'pen', curColor = 'W', lvTile = '#';
+let clipboard = null;
+const undo = [];
+
+const $ = id => document.getElementById(id);
+const status = (msg, cls='') => { const s = $('status'); s.textContent = msg; s.className = cls; };
+const setDirty = v => { dirty = v; $('btnSave').disabled = !src; $('btnDownload').disabled = !src;
+  $('fileName').textContent = fileName ? (fileName + (dirty ? ' •sin guardar' : '')) : ''; };
+
+// ============================== parseo ==============================
+const RE_ARR = /static const char \*const (\w+)\[\] = \{([\s\S]*?)\};/g;
+function parseSource(text) {
+  palette = []; arts = {}; artOrder = []; levels = {}; levelOrder = []; defines = {}; texts = {};
+  let m;
+  RE_ARR.lastIndex = 0;
+  while ((m = RE_ARR.exec(text))) {
+    const rows = [...m[2].matchAll(/"([^"]*)"/g)].map(x => x[1]);
+    if (/^LEVEL/.test(m[1])) { levels[m[1]] = rows; levelOrder.push(m[1]); }
+    else { arts[m[1]] = rows; artOrder.push(m[1]); }
+  }
+  const pm = /PALETTE\[\] = \{([\s\S]*?)\};/.exec(text);
+  if (pm) for (const e of pm[1].matchAll(/\{\s*'(.)',\s*0x([0-9A-Fa-f]{6})\s*\}/g)) palette.push({ k: e[1], rgb: e[2].toUpperCase() });
+  for (const d of text.matchAll(/#define (C_\w+|COLOR_\w+)\s+0x([0-9A-Fa-f]{6})\b/g)) defines[d[1]] = d[2].toUpperCase();
+  for (const t of text.matchAll(/#define (GAME_\w+)\s+"([^"]*)"/g)) texts[t[1]] = t[2];
+  levelThemes = {};
+  for (const t of text.matchAll(/\{\s*(LEVEL_\w+)\s*,[^}]*?THEME_(\w+)/g)) levelThemes[t[1]] = t[2];
+  if (!artOrder.length) throw new Error('No encontre figuras (static const char *const ART_...[]). ¿Es el archivo del juego?');
+}
+
+function rowsBlock(rows) { return '\n' + rows.map(r => '    "' + r + '",').join('\n') + '\n'; }
+
+function buildSource() {
+  let out = src;
+  out = out.replace(RE_ARR, (all, name) => {
+    const rows = arts[name] || levels[name];
+    return rows ? `static const char *const ${name}[] = {${rowsBlock(rows)}};` : all;
+  });
+  out = out.replace(/(PALETTE\[\] = \{)([\s\S]*?)(\};)/, (all, a, body, c) => {
+    const seen = new Set();
+    body = body.replace(/\{\s*'(.)',\s*0x([0-9A-Fa-f]{6})\s*\}/g, (e, k) => {
+      const p = palette.find(p => p.k === k); seen.add(k);
+      return p ? `{ '${k}', 0x${p.rgb} }` : e;
+    });
+    const extra = palette.filter(p => !seen.has(p.k)).map(p => `    { '${p.k}', 0x${p.rgb} },  /* nuevo */\n`).join('');
+    body = body.replace(/\s*$/, '\n') + extra;
+    return a + body + c;
+  });
+  for (const [k, v] of Object.entries(defines))
+    out = out.replace(new RegExp('(#define ' + k + '\\s+0x)[0-9A-Fa-f]{6}\\b'), '$1' + v);
+  for (const [k, v] of Object.entries(texts))
+    out = out.replace(new RegExp('(#define ' + k + '\\s+")[^"]*(")'), (all, a, b) => a + v.replace(/["\\]/g, '') + b);
+  return out;
+}
+
+// ============================== archivo ==============================
+// El selector moderno (guarda directo en el archivo) solo anda en Chrome/Edge y
+// en la ventana principal; dentro de vistas previas (VS Code, iframes) esta
+// bloqueado, asi que ahi se usa el selector clasico (luego "Descargar copia").
+const canPicker = !!window.showOpenFilePicker && window.top === window.self;
+async function openFile() {
+  if (dirty && !confirm('Hay cambios sin guardar. ¿Abrir otro archivo igual?')) return;
+  if (!canPicker) { $('fileInput').click(); return; }
+  try {
+    const [h] = await showOpenFilePicker({ types: [{ description: 'Codigo C', accept: { 'text/plain': ['.c', '.h'] } }] });
+    const f = await h.getFile();
+    loadText(await f.text(), f.name, h);
+  } catch (e) {
+    if (e.name === 'AbortError') return;
+    status('Este navegador bloqueo el selector (' + e.message + '). Arrastra el archivo .c a esta pagina, o abrela con doble clic desde el Explorador de Windows.', 'err');
+  }
+}
+// arrastrar y soltar el .c sobre la pagina
+document.addEventListener('dragover', e => { e.preventDefault(); });
+document.addEventListener('drop', async e => {
+  e.preventDefault();
+  const item = [...(e.dataTransfer.items || [])].find(i => i.kind === 'file');
+  if (!item) return;
+  if (dirty && !confirm('Hay cambios sin guardar. ¿Abrir otro archivo igual?')) return;
+  let handle = null;
+  if (canPicker && item.getAsFileSystemHandle) { try { handle = await item.getAsFileSystemHandle(); } catch (_) {} }
+  const f = handle ? await handle.getFile() : item.getAsFile();
+  if (f) loadText(await f.text(), f.name, handle);
+});
+$('fileInput').onchange = async e => { const f = e.target.files[0]; if (f) loadText(await f.text(), f.name, null); e.target.value = ''; };
+
+function loadText(text, name, handle) {
+  try { parseSource(text); }
+  catch (e) { status(e.message, 'err'); return; }
+  src = text; fileName = name; fileHandle = handle; undo.length = 0;
+  $('emptyMsg').style.display = 'none';
+  document.querySelectorAll('.tab').forEach(t => t.hidden = false);
+  curArt = artOrder[0]; curLevel = levelOrder[0] || null;
+  curColor = (palette.find(p => p.k !== '.') || {}).k || 'W';
+  const big = /#define PIX\s+(\d+)/.exec(text);
+  $('pvScale').value = big ? big[1] : '2';
+  setDirty(false);
+  renderAll();
+  status(`Abierto: ${artOrder.length} figuras, ${levelOrder.length} nivel(es), ${palette.length} colores.` +
+         (handle ? '' : ' (Este navegador no guarda directo: usa "Descargar copia")'), 'ok');
+}
+
+async function save() {
+  const text = buildSource();
+  if (fileHandle) {
+    try {
+      const w = await fileHandle.createWritable(); await w.write(text); await w.close();
+      src = text; setDirty(false);
+      status('Guardado ✔  Ahora compila el simulador (mingw32-make en sim/build) y abre sim.exe.', 'ok');
+      return;
+    } catch (e) { status('No se pudo guardar directo (' + e.message + '). Descargo una copia.', 'err'); }
+  }
+  download(text);
+}
+function download(text = buildSource()) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
+  a.download = fileName || 'juego.c'; a.click();
+  URL.revokeObjectURL(a.href);
+  src = text; setDirty(false);
+  status('Copia descargada. Reemplaza con ella el archivo en main/ui/ y compila el simulador.', 'ok');
+}
+$('btnOpen').onclick = openFile;
+$('btnSave').onclick = save;
+$('btnDownload').onclick = () => download();
+window.addEventListener('beforeunload', e => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
+
+// ============================== utilidades de dibujo ==============================
+const palMap = () => Object.fromEntries(palette.map(p => [p.k, '#' + p.rgb]));
+const artW = rows => rows.reduce((m, r) => Math.max(m, r.length), 0);
+function normalize(rows) { const w = artW(rows); return rows.map(r => r.padEnd(w, '.')); }
+function drawArt(ctx, rows, x, y, s, pm = palMap()) {
+  rows.forEach((r, ry) => { for (let c = 0; c < r.length; c++) {
+    const col = pm[r[c]]; if (!col) continue;
+    ctx.fillStyle = col; ctx.fillRect(x + c * s, y + ry * s, s, s);
+  }});
+}
+// rellena un area repitiendo un dibujo (texturas ART_TEX_*)
+const patCache = new Map();
+function artPattern(ctx, rows, s) {
+  const key = s + '|' + palette.map(p => p.k + p.rgb).join('') + '|' + rows.join('|');
+  let c = patCache.get(key);
+  if (!c) {
+    if (patCache.size > 300) patCache.clear();
+    c = document.createElement('canvas'); c.width = Math.max(1, Math.round(artW(rows) * s)); c.height = Math.max(1, Math.round(rows.length * s));
+    drawArt(c.getContext('2d'), rows, 0, 0, s); patCache.set(key, c);
+  }
+  return ctx.createPattern(c, 'repeat');
+}
+function tileArt(ctx, rows, x, y, w, h, s, ox = 0) {
+  if (!rows) return false;
+  ctx.save(); ctx.translate(x - ox, y); ctx.fillStyle = artPattern(ctx, rows, s); ctx.fillRect(ox, 0, w, h); ctx.restore(); return true;
+}
+const groupOf = n => n.replace(/(_?F)?\d+$/, '').replace(/_$/, '');
+const prettyName = n => n.replace(/^ART_/, '').replace(/_/g, ' ');
+
+// ============================== FIGURAS ==============================
+function renderGroups() {
+  const g = {}; artOrder.forEach(n => (g[groupOf(n)] = g[groupOf(n)] || []).push(n));
+  const box = $('groups'); box.innerHTML = '';
+  const pm = palMap();
+  for (const [gname, names] of Object.entries(g)) {
+    const d = document.createElement('div'); d.className = 'group';
+    d.innerHTML = `<div class="gname">${prettyName(gname)}${names.length > 1 ? ' · ' + names.length + ' cuadros' : ''}</div>`;
+    const th = document.createElement('div'); th.className = 'thumbs';
+    for (const n of names) {
+      const rows = arts[n], w = artW(rows), h = rows.length;
+      const s = Math.max(1, Math.min(4, Math.floor(56 / Math.max(w, h))));
+      const t = document.createElement('div'); t.className = 'thumb' + (n === curArt ? ' sel' : '');
+      const c = document.createElement('canvas'); c.width = w * s; c.height = h * s;
+      drawArt(c.getContext('2d'), rows, 0, 0, s, pm);
+      t.appendChild(c);
+      t.insertAdjacentHTML('beforeend', `<div class="tn">${prettyName(n)}</div>`);
+      t.onclick = () => { curArt = n; renderSprites(); };
+      th.appendChild(t);
+    }
+    d.appendChild(th); box.appendChild(d);
+  }
+}
+
+function renderEditor() {
+  const rows = arts[curArt] = normalize(arts[curArt]);
+  const z = +$('zoom').value, w = artW(rows), h = rows.length;
+  const c = $('editCanvas'); c.width = w * z + 1; c.height = h * z + 1;
+  const ctx = c.getContext('2d');
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    ctx.fillStyle = (x + y) % 2 ? '#22252d' : '#1a1c22'; ctx.fillRect(x * z, y * z, z, z);
+  }
+  drawArt(ctx, rows, 0, 0, z);
+  ctx.strokeStyle = 'rgba(255,255,255,.08)'; ctx.beginPath();
+  for (let x = 0; x <= w; x++) { ctx.moveTo(x * z + .5, 0); ctx.lineTo(x * z + .5, h * z); }
+  for (let y = 0; y <= h; y++) { ctx.moveTo(0, y * z + .5); ctx.lineTo(w * z, y * z + .5); }
+  ctx.stroke();
+  $('editTitle').textContent = prettyName(curArt) + '  (' + curArt + ')';
+  $('sizeLbl').textContent = w + ' × ' + h;
+}
+
+function renderSwatches() {
+  const box = $('swatches'); box.innerHTML = '';
+  const all = [{ k: '.', rgb: null }, ...palette];
+  for (const p of all) {
+    const d = document.createElement('div');
+    d.className = 'sw' + (p.k === curColor ? ' sel' : '') + (p.rgb ? '' : ' transp');
+    d.innerHTML = `<div class="chip" style="${p.rgb ? 'background:#' + p.rgb : ''}"></div>${p.k === '.' ? 'vacio' : p.k}`;
+    d.title = p.rgb ? `Letra ${p.k} = #${p.rgb}` : 'Transparente (.)';
+    d.onclick = () => { curColor = p.k; if (tool === 'erase' || tool === 'pick') setTool('pen'); renderSwatches(); };
+    box.appendChild(d);
+  }
+  const sel = palette.find(p => p.k === curColor);
+  $('colorEdit').disabled = !sel;
+  if (sel) $('colorEdit').value = '#' + sel.rgb;
+}
+$('colorEdit').oninput = e => {
+  const p = palette.find(p => p.k === curColor); if (!p) return;
+  p.rgb = e.target.value.slice(1).toUpperCase(); setDirty(true); renderSprites(); renderLevel(); renderWorld();
+};
+const FREE_KEYS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+function addColor(rgb) {
+  const k = [...FREE_KEYS].find(k => !palette.some(p => p.k === k));
+  if (!k) { status('No quedan letras libres para colores.', 'err'); return null; }
+  palette.push({ k, rgb }); setDirty(true); return k;
+}
+$('btnAddColor').onclick = () => { const k = addColor('FF00FF'); if (k) { curColor = k; renderSwatches(); $('colorEdit').click(); } };
+
+function setTool(t) { tool = t; document.querySelectorAll('[data-tool]').forEach(b => b.classList.toggle('on', b.dataset.tool === t)); }
+document.querySelectorAll('[data-tool]').forEach(b => b.onclick = () => setTool(b.dataset.tool));
+$('zoom').oninput = renderEditor;
+
+function pushUndo(kind, name, rows) { undo.push({ kind, name, rows: rows.slice() }); if (undo.length > 200) undo.shift(); }
+function doUndo() {
+  const u = undo.pop(); if (!u) return;
+  if (u.kind === 'art') { arts[u.name] = u.rows; curArt = u.name; renderSprites(); }
+  else { levels[u.name] = u.rows; curLevel = u.name; renderLevel(); }
+  setDirty(true);
+}
+$('btnUndo').onclick = doUndo;
+document.addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); doUndo(); } });
+
+function setCell(rows, x, y, ch) {
+  if (y < 0 || y >= rows.length || x < 0 || x >= rows[y].length) return false;
+  if (rows[y][x] === ch) return false;
+  rows[y] = rows[y].slice(0, x) + ch + rows[y].slice(x + 1); return true;
+}
+function flood(rows, x, y, ch) {
+  const from = rows[y][x]; if (from === ch) return;
+  const st = [[x, y]];
+  while (st.length) { const [cx, cy] = st.pop(); if (rows[cy]?.[cx] !== from) continue;
+    setCell(rows, cx, cy, ch); st.push([cx+1,cy],[cx-1,cy],[cx,cy+1],[cx,cy-1]); }
+}
+let painting = false;
+const ec = $('editCanvas');
+ec.oncontextmenu = e => e.preventDefault();
+function editAt(e, first) {
+  const z = +$('zoom').value, r = ec.getBoundingClientRect();
+  const x = Math.floor((e.clientX - r.left) / z), y = Math.floor((e.clientY - r.top) / z);
+  const rows = arts[curArt]; if (!rows[y] || x < 0 || x >= rows[y].length) return;
+  const erase = e.buttons === 2 || tool === 'erase';
+  if (tool === 'pick' && !erase) { curColor = rows[y][x]; setTool('pen'); renderSwatches(); return; }
+  if (first) pushUndo('art', curArt, rows);
+  let ch = erase ? '.' : curColor, changed;
+  if (tool === 'fill' && !erase) { flood(rows, x, y, ch); changed = true; } else changed = setCell(rows, x, y, ch);
+  if (changed) { setDirty(true); renderEditor(); }
+}
+ec.onmousedown = e => { painting = tool !== 'fill' && tool !== 'pick'; editAt(e, true); };
+ec.onmousemove = e => { if (painting && e.buttons) editAt(e, false); };
+window.addEventListener('mouseup', () => { if (painting) { painting = false; renderGroups(); } });
+
+document.querySelectorAll('[data-resize]').forEach(b => b.onclick = () => {
+  let rows = arts[curArt]; pushUndo('art', curArt, rows);
+  const w = artW(rows), op = b.dataset.resize;
+  if (op === 'addL') rows = rows.map(r => '.' + r);
+  if (op === 'addR') rows = rows.map(r => r + '.');
+  if (op === 'delL' && w > 1) rows = rows.map(r => r.slice(1));
+  if (op === 'delR' && w > 1) rows = rows.map(r => r.slice(0, -1));
+  if (op === 'addT') rows = ['.'.repeat(w), ...rows];
+  if (op === 'addB') rows = [...rows, '.'.repeat(w)];
+  if (op === 'delT' && rows.length > 1) rows = rows.slice(1);
+  if (op === 'delB' && rows.length > 1) rows = rows.slice(0, -1);
+  arts[curArt] = rows; setDirty(true); renderSprites();
+});
+document.querySelectorAll('[data-op]').forEach(b => b.onclick = () => {
+  let rows = normalize(arts[curArt]); const op = b.dataset.op, w = artW(rows);
+  if (op === 'copy') { clipboard = rows.slice(); status('Figura copiada. Elige otra y pulsa Pegar.'); return; }
+  if (op === 'paste' && !clipboard) return;
+  pushUndo('art', curArt, rows);
+  if (op === 'mirror') rows = rows.map(r => [...r].reverse().join(''));
+  if (op === 'flipv') rows = rows.slice().reverse();
+  if (op === 'left')  rows = rows.map(r => r.slice(1) + '.');
+  if (op === 'right') rows = rows.map(r => '.' + r.slice(0, -1));
+  if (op === 'up')    rows = [...rows.slice(1), '.'.repeat(w)];
+  if (op === 'down')  rows = ['.'.repeat(w), ...rows.slice(0, -1)];
+  if (op === 'paste') rows = clipboard.slice();
+  if (op === 'clear') rows = rows.map(r => '.'.repeat(r.length));
+  arts[curArt] = rows; setDirty(true); renderSprites();
+});
+
+// ---- importar PNG ----
+$('btnImport').onclick = () => $('pngInput').click();
+$('pngInput').onchange = e => {
+  const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+  const img = new Image();
+  img.onload = () => {
+    if ((img.width > 96 || img.height > 96) &&
+        !confirm(`La imagen es ${img.width}×${img.height}. Para figuras se espera tamaño pixel-art real (ej. 12×16, 24×32). ¿Importar igual?`)) return;
+    const c = document.createElement('canvas'); c.width = img.width; c.height = img.height;
+    const ctx = c.getContext('2d'); ctx.drawImage(img, 0, 0);
+    const d = ctx.getImageData(0, 0, img.width, img.height).data;
+    const addNew = $('addColors').checked;
+    const hex = (r, g, b) => [r, g, b].map(v => v.toString(16).padStart(2, '0')).join('').toUpperCase();
+    const near = (r, g, b) => {
+      let best = null, bd = 1e9;
+      for (const p of palette) { const pr = parseInt(p.rgb.slice(0,2),16), pg = parseInt(p.rgb.slice(2,4),16), pb = parseInt(p.rgb.slice(4),16);
+        const dd = (pr-r)**2 + (pg-g)**2 + (pb-b)**2; if (dd < bd) { bd = dd; best = p.k; } }
+      return [best, bd];
+    };
+    pushUndo('art', curArt, arts[curArt]);
+    const rows = [];
+    for (let y = 0; y < img.height; y++) { let row = '';
+      for (let x = 0; x < img.width; x++) { const i = (y * img.width + x) * 4;
+        if (d[i+3] < 128) { row += '.'; continue; }
+        let [k, dist] = near(d[i], d[i+1], d[i+2]);
+        if ((dist > 300 || !k) && addNew) k = addColor(hex(d[i], d[i+1], d[i+2])) || k;
+        row += k || '.';
+      } rows.push(row); }
+    arts[curArt] = rows; setDirty(true); renderSprites();
+    status(`PNG importado en ${prettyName(curArt)} (${img.width}×${img.height}).`, 'ok');
+  };
+  img.src = URL.createObjectURL(f);
+};
+
+// ---- vista previa animada ----
+for (const s of [1,2,3,4,5,6]) $('pvScale').insertAdjacentHTML('beforeend', `<option value="${s}">x${s}</option>`);
+let pvFrame = 0, pvLast = 0;
+function previewLoop(t) {
+  requestAnimationFrame(previewLoop);
+  if (!src || !curArt) return;
+  if (t - pvLast < 1000 / +$('pvFps').value) return;
+  pvLast = t;
+  const frames = artOrder.filter(n => groupOf(n) === groupOf(curArt));
+  pvFrame = (pvFrame + 1) % frames.length;
+  const c = $('preview'), ctx = c.getContext('2d'), s = +$('pvScale').value;
+  const g = ctx.createLinearGradient(0, 0, 0, c.height);
+  g.addColorStop(0, '#' + (defines.C_SKY_TOP || defines.C_BG_TOP || defines.COLOR_BG || '4A90E2'));
+  g.addColorStop(1, '#' + (defines.C_SKY_BOT || defines.C_BG_BOT || defines.COLOR_BG || 'BEE3FF'));
+  ctx.fillStyle = g; ctx.fillRect(0, 0, c.width, c.height);
+  const rows = arts[frames[pvFrame]], w = artW(rows) * s, h = rows.length * s;
+  if (arts.ART_TEX_WALL) {
+    tileArt(ctx, arts.ART_TEX_WALL, 0, 0, c.width, c.height, 2);
+    tileArt(ctx, arts.ART_TEX_STONE, 0, c.height - 24, c.width, 24, 2);
+    tileArt(ctx, arts.ART_TEX_SLIME, 0, c.height - 26, c.width, 12, 2);
+  } else if (defines.C_GRASS) { ctx.fillStyle = '#' + defines.C_DIRT; ctx.fillRect(0, c.height - 24, c.width, 24);
+    ctx.fillStyle = '#' + defines.C_GRASS; ctx.fillRect(0, c.height - 26, c.width, 8); }
+  drawArt(ctx, rows, Math.round((c.width - w) / 2), c.height - 26 - h, s);
+}
+requestAnimationFrame(previewLoop);
+
+function renderSprites() { renderGroups(); renderEditor(); renderSwatches(); }
+
+// ============================== NIVEL ==============================
+const TILES = [
+  { ch: '.', name: 'Vacio' }, { ch: '#', name: 'Suelo' }, { ch: '=', name: 'Plataforma' },
+  { ch: 'B', name: 'Ladrillo' }, { ch: '^', name: 'Pinchos' }, { ch: 'o', name: 'Moneda' },
+  { ch: 'w', name: 'Caminante' }, { ch: 't', name: 'Torreta' }, { ch: 'P', name: 'Inicio' },
+  { ch: 'C', name: 'Control' }, { ch: 'F', name: 'Meta' },
+  { ch: 'R', name: 'Escombros' }, { ch: 'r', name: 'Basura' },
+];
+const TILE_ART = { '^': 'ART_SPIKES', o: 'ART_COIN1', w: 'ART_WALK1', t: 'ART_TURRET', P: 'ART_P_IDLE', r: 'ART_DEBRIS' };
+let levelThemes = {}, curTheme = '';   // LEVEL_2 -> 'TUNNEL' (de la tabla LEVELS[] del juego)
+const col = (k, d) => '#' + (defines[k] || d);
+function drawTile(ctx, ch, x, y, s, rows, cx, cy, pm) {
+  const solid = c => c === '#' || c === '=' || c === 'B';
+  const ts = s / 16; // las texturas miden 16 px por bloque
+  const tunnel = curTheme === 'TUNNEL';
+  const groundArt = tunnel && arts.ART_TEX_CFLOOR ? arts.ART_TEX_CFLOOR : arts.ART_TEX_STONE;
+  if (ch === '#' && groundArt) { tileArt(ctx, groundArt, x, y, s, s, ts);
+    const top = !rows || !solid((rows[cy - 1] || '')[cx]);
+    if (top && tunnel) { ctx.fillStyle = col('C_RING', '9FB6CC'); ctx.fillRect(x, y, s, Math.max(1, s / 8)); }
+    else if (top && arts.ART_TEX_SLIME) tileArt(ctx, arts.ART_TEX_SLIME, x, y - ts, s, arts.ART_TEX_SLIME.length * ts, ts);
+    return; }
+  if (ch === 'R' && arts.ART_TEX_RUBBLE) { tileArt(ctx, arts.ART_TEX_RUBBLE, x, y, s, s, ts); return; }
+  if (ch === '=' && arts.ART_TEX_GRATE) { tileArt(ctx, arts.ART_TEX_GRATE, x, y, s, arts.ART_TEX_GRATE.length * ts, ts); return; }
+  if (ch === 'B' && arts.ART_TEX_CRATE) { tileArt(ctx, arts.ART_TEX_CRATE, x, y, s, s, ts); return; }
+  if (ch === '#') { ctx.fillStyle = col('C_DIRT', '8A5A2E'); ctx.fillRect(x, y, s, s);
+    if (!rows || !solid((rows[cy - 1] || '')[cx])) { ctx.fillStyle = col('C_GRASS', '4CC94C'); ctx.fillRect(x, y, s, Math.max(2, s * .3)); } return; }
+  if (ch === '=') { ctx.fillStyle = col('C_PLATFORM', '7A8499'); ctx.fillRect(x, y, s, s * .7);
+    ctx.fillStyle = col('C_PLAT_TOP', 'C2CBDD'); ctx.fillRect(x, y, s, Math.max(2, s * .12)); return; }
+  if (ch === 'B') { ctx.fillStyle = col('C_BRICK_DARK', '7A2E14'); ctx.fillRect(x, y, s, s);
+    ctx.fillStyle = col('C_BRICK', 'C0562A'); ctx.fillRect(x + 1, y + 1, s - 2, s / 2 - 2); ctx.fillRect(x + 1, y + s / 2 + 1, s - 2, s / 2 - 2); return; }
+  if (ch === 'C') { ctx.fillStyle = '#ddd'; ctx.fillRect(x + s * .45, y, s * .12, s); ctx.fillStyle = '#9aa4b8';
+    ctx.beginPath(); ctx.arc(x + s / 2, y + s * .2, s * .22, 0, 7); ctx.fill(); return; }
+  if (ch === 'F') { ctx.fillStyle = '#eee'; ctx.fillRect(x + s * .45, y - s * 3, s * .12, s * 4);
+    ctx.fillStyle = '#30D158'; ctx.fillRect(x + s * .57, y - s * 3, s * 1.2, s * .8); return; }
+  const an = TILE_ART[ch];
+  if (an && arts[an]) { const a = arts[an], aw = artW(a), ah = a.length, sc = s / Math.max(aw, ah);
+    const px = Math.max(1, sc); const ox = x + (s - aw * sc) / 2, oy = y + s - ah * sc;
+    a.forEach((r, ry) => { for (let c = 0; c < r.length; c++) { const cc = pm[r[c]]; if (!cc) continue;
+      ctx.fillStyle = cc; ctx.fillRect(ox + c * sc, oy + ry * sc, px, px); } }); return; }
+  if (ch !== '.') { ctx.fillStyle = '#f0f'; ctx.fillRect(x, y, s, s); ctx.fillStyle = '#000'; ctx.fillText(ch, x + 3, y + s - 4); }
+}
+
+function renderLevelTools() {
+  const box = $('levelTools'); box.innerHTML = '';
+  const pm = palMap();
+  for (const t of TILES) {
+    const b = document.createElement('button'); b.className = 'tile' + (t.ch === lvTile ? ' on' : '');
+    const c = document.createElement('canvas'); c.width = 22; c.height = 22;
+    const ctx = c.getContext('2d'); ctx.fillStyle = '#4A90E2'; ctx.fillRect(0, 0, 22, 22);
+    if (t.ch === 'F') { ctx.fillStyle = '#eee'; ctx.fillRect(9, 2, 3, 20); ctx.fillStyle = '#30D158'; ctx.fillRect(12, 2, 9, 7); }
+    else drawTile(ctx, t.ch, 1, 1, 20, null, 0, 0, pm);
+    b.appendChild(c); b.insertAdjacentHTML('beforeend', `${t.name} <code>${t.ch}</code>`);
+    b.onclick = () => { lvTile = t.ch; renderLevelTools(); };
+    box.appendChild(b);
+  }
+}
+
+function renderLevel() {
+  const sel = $('levelSel');
+  sel.innerHTML = levelOrder.map(n => `<option ${n === curLevel ? 'selected' : ''}>${n}</option>`).join('');
+  if (!curLevel) { $('levelScroll').style.display = 'none'; $('levelWarn').textContent = 'Este juego no tiene niveles (LEVEL_...).'; return; }
+  $('levelScroll').style.display = '';
+  const rows = levels[curLevel] = normalize(levels[curLevel]);
+  const z = +$('lvZoom').value, W = artW(rows), H = rows.length;
+  const c = $('levelCanvas'); c.width = W * z; c.height = H * z;
+  const ctx = c.getContext('2d'); ctx.font = `${Math.max(8, z - 4)}px monospace`;
+  curTheme = levelThemes[curLevel] || '';
+  if (arts.ART_TEX_WALL) { // alcantarilla / tunel: pared de fondo + agua en las filas 13-14
+    const tunnel = curTheme === 'TUNNEL' && arts.ART_TEX_CONCRETE;
+    tileArt(ctx, tunnel ? arts.ART_TEX_CONCRETE : arts.ART_TEX_WALL, 0, 0, c.width, c.height, z / 16);
+    ctx.fillStyle = 'rgba(0,0,0,.35)'; ctx.fillRect(0, 0, c.width, c.height);
+    ctx.fillStyle = tunnel ? col('C_MURKY_DEEP', '1E2410') : col('C_WATER_DEEP', '0F3316');
+    ctx.fillRect(0, 13 * z + z * 12 / 32, c.width, c.height);
+    const wa = (tunnel && arts.ART_TEX_WATER2) || arts.ART_TEX_WATER;
+    tileArt(ctx, wa, 0, 13 * z + z * 4 / 32, c.width, (wa || []).length * z / 16, z / 16);
+  } else {
+    const g = ctx.createLinearGradient(0, 0, 0, c.height);
+    g.addColorStop(0, col('C_SKY_TOP', '4A90E2')); g.addColorStop(1, col('C_SKY_BOT', 'BEE3FF'));
+    ctx.fillStyle = g; ctx.fillRect(0, 0, c.width, c.height);
+  }
+  ctx.strokeStyle = 'rgba(255,255,255,.12)'; ctx.beginPath();
+  for (let x = 0; x <= W; x++) { ctx.moveTo(x * z + .5, 0); ctx.lineTo(x * z + .5, c.height); }
+  for (let y = 0; y <= H; y++) { ctx.moveTo(0, y * z + .5); ctx.lineTo(c.width, y * z + .5); }
+  ctx.stroke();
+  const pm = palMap();
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (rows[y][x] !== '.') drawTile(ctx, rows[y][x], x * z, y * z, z, rows, x, y, pm);
+  ctx.strokeStyle = 'rgba(230,184,0,.8)'; ctx.lineWidth = 2; ctx.beginPath();
+  for (let x = 25; x < W; x += 25) { ctx.moveTo(x * z, 0); ctx.lineTo(x * z, c.height); }
+  ctx.stroke(); ctx.lineWidth = 1;
+  $('lvInfo').textContent = `${W} × ${H} bloques  (≈ ${(W / 25).toFixed(1)} pantallas)`;
+  const cnt = ch => rows.reduce((n, r) => n + r.split(ch).length - 1, 0);
+  const warn = [];
+  if (cnt('P') !== 1) warn.push(`Debe haber exactamente 1 inicio (P); hay ${cnt('P')}.`);
+  if (cnt('F') < 1) warn.push('Falta la meta (F).');
+  if (H !== 15) warn.push(`El nivel debe tener 15 filas; tiene ${H}.`);
+  if (W > 256) warn.push(`Maximo 256 columnas; tiene ${W}.`);
+  $('levelWarn').textContent = warn.join('  ');
+}
+$('levelSel').onchange = e => { curLevel = e.target.value; renderLevel(); };
+$('lvZoom').oninput = renderLevel;
+$('lvAdd').onclick = () => { pushUndo('level', curLevel, levels[curLevel]);
+  levels[curLevel] = levels[curLevel].map((r, y) => r + (y >= 13 ? '#' : '.').repeat(10)); setDirty(true); renderLevel(); };
+$('lvDel').onclick = () => { if (artW(levels[curLevel]) <= 35) return; pushUndo('level', curLevel, levels[curLevel]);
+  levels[curLevel] = levels[curLevel].map(r => r.slice(0, -10)); setDirty(true); renderLevel(); };
+const lc = $('levelCanvas'); let lvPaint = false;
+lc.oncontextmenu = e => e.preventDefault();
+function levelAt(e, first) {
+  const z = +$('lvZoom').value, r = lc.getBoundingClientRect();
+  const x = Math.floor((e.clientX - r.left) / z), y = Math.floor((e.clientY - r.top) / z);
+  const rows = levels[curLevel]; if (!rows[y] || x < 0 || x >= rows[y].length) return;
+  if (first) pushUndo('level', curLevel, rows);
+  const ch = e.buttons === 2 ? '.' : lvTile;
+  if (ch === 'P' && rows[y][x] !== 'P') for (let yy = 0; yy < rows.length; yy++) rows[yy] = rows[yy].replace(/P/g, '.');
+  if (setCell(rows, x, y, ch)) { setDirty(true); renderLevel(); }
+}
+lc.onmousedown = e => { lvPaint = true; levelAt(e, true); };
+lc.onmousemove = e => { if (lvPaint && e.buttons) levelAt(e, false); };
+window.addEventListener('mouseup', () => lvPaint = false);
+
+// ============================== COLORES ==============================
+const CNAMES = {
+  C_SKY_TOP: 'Cielo (arriba)', C_SKY_BOT: 'Cielo (abajo)', C_FAR_HILL: 'Montañas lejanas', C_NEAR_HILL: 'Colinas cercanas',
+  C_CLOUD: 'Nubes', C_DIRT: 'Tierra', C_DIRT_DARK: 'Tierra (sombra)', C_GRASS: 'Pasto', C_GRASS_DARK: 'Pasto (borde)',
+  C_PLATFORM: 'Plataforma', C_PLAT_TOP: 'Plataforma (borde)', C_BRICK: 'Ladrillo', C_BRICK_DARK: 'Ladrillo (juntas)',
+  C_BULLET: 'Disparo jugador', C_EBULLET: 'Disparo enemigo / acido',
+  C_BG_TOP: 'Fondo (arriba)', C_BG_BOT: 'Fondo (abajo)', C_ARCH: 'Tuneles', C_ARCH_EDGE: 'Borde de tuneles',
+  C_PIPE: 'Caños', C_PIPE_DARK: 'Caños (sombra)', C_RUST: 'Oxido', C_LIGHT: 'Luz de lamparas',
+  C_DRIP: 'Gotas', C_STREAM: 'Chorro de agua', C_WATER_DEEP: 'Agua toxica (fondo)',
+  C_RING: 'Tunel: anillos / borde del piso', C_TUNNEL_DARK: 'Tunel: oscuridad', C_TUNNEL_LIGHT: 'Tunel: luz del fondo',
+  C_MURKY_DEEP: 'Tunel: agua turbia',
+  COLOR_BG: 'Fondo', COLOR_SHOT: 'Disparo jugador', COLOR_ENEMY_SHOT: 'Disparo enemigo', COLOR_HUD: 'Textos del marcador',
+  COLOR_TITLE: 'Titulo', COLOR_ACCENT: 'Resaltado',
+};
+function renderColors() {
+  const box = $('clist'); box.innerHTML = '';
+  for (const [k, v] of Object.entries(defines)) {
+    const d = document.createElement('div'); d.className = 'citem';
+    d.innerHTML = `<input type="color" value="#${v}"><div><div class="cn">${CNAMES[k] || k}</div><div class="cd">${k}</div></div>`;
+    d.querySelector('input').oninput = e => { defines[k] = e.target.value.slice(1).toUpperCase(); setDirty(true); renderWorld(); };
+    box.appendChild(d);
+  }
+  renderWorld();
+}
+function renderWorld() {
+  const c = $('worldPreview'), ctx = c.getContext('2d'), W = c.width, H = c.height;
+  if (arts.ART_TEX_WALL) { // alcantarilla
+    const pm = palMap();
+    tileArt(ctx, arts.ART_TEX_WALL, 0, 0, W, H, 2);
+    const rr = (x, y, w, h, cc, r = 0, a = 1) => { ctx.globalAlpha = a; ctx.fillStyle = cc; ctx.beginPath(); ctx.roundRect(x, y, w, h, r); ctx.fill(); ctx.globalAlpha = 1; };
+    rr(90, H - 60 - 170, 150, 260, col('C_ARCH_EDGE', '3A4238'), 75); rr(98, H - 60 - 162, 134, 250, col('C_ARCH', '070A08'), 67);
+    rr(155, H - 120, 20, 70, col('C_STREAM', '5DBB4C'), 4, .6);
+    rr(0, 30, W, 30, col('C_PIPE', '5E6A63')); rr(0, 54, W, 6, col('C_PIPE_DARK', '343C38'));
+    rr(330, 30, 16, 40, col('C_PIPE_DARK', '343C38'), 2); rr(360, 62, 26, 9, col('C_RUST', '8A4B22'), 3);
+    rr(500, 10, 200, 200, col('C_LIGHT', 'FFD27A'), 100, .09); rr(560, 70, 80, 80, col('C_LIGHT', 'FFD27A'), 40, .15);
+    rr(597, 60, 6, 40, col('C_PIPE_DARK', '343C38')); rr(586, 98, 28, 12, col('C_LIGHT', 'FFD27A'), 5);
+    rr(720, 0, 36, 120, col('C_PIPE', '5E6A63')); rr(714, 104, 48, 16, col('C_PIPE_DARK', '343C38'), 3);
+    rr(736, 150, 4, 9, col('C_DRIP', '8FD18F'), 2);
+    rr(0, H - 52, W, 52, col('C_WATER_DEEP', '0F3316'));
+    tileArt(ctx, arts.ART_TEX_WATER, 0, H - 60, W, 16, 2);
+    tileArt(ctx, arts.ART_TEX_STONE, 0, H - 64, 384, 64, 2); tileArt(ctx, arts.ART_TEX_SLIME, 0, H - 66, 384, 12, 2);
+    tileArt(ctx, arts.ART_TEX_STONE, 512, H - 64, 288, 64, 2); tileArt(ctx, arts.ART_TEX_SLIME, 512, H - 66, 288, 12, 2);
+    tileArt(ctx, arts.ART_TEX_GRATE, 400, 150, 96, 22, 2);
+    tileArt(ctx, arts.ART_TEX_CRATE, 230, 110, 128, 32, 2);
+    rr(160, H - 96, 12, 5, col('C_BULLET', 'FFE34A'), 2);
+    ctx.fillStyle = col('C_EBULLET', '9CFF3A'); ctx.beginPath(); ctx.arc(660, H - 110, 5, 0, 7); ctx.fill();
+    if (arts.ART_P_IDLE) drawArt(ctx, arts.ART_P_IDLE, 110, H - 64 - 32, 2, pm);
+    if (arts.ART_WALK1) drawArt(ctx, arts.ART_WALK1, 560, H - 64 - 18, 2, pm);
+    if (arts.ART_TURRET) drawArt(ctx, arts.ART_TURRET, 700, H - 64 - 32, 2, pm);
+    return;
+  }
+  if (!defines.C_SKY_TOP) { // juego de naves
+    ctx.fillStyle = col('COLOR_BG', '05060F'); ctx.fillRect(0, 0, W, H);
+    for (let i = 0; i < 60; i++) { ctx.fillStyle = i % 5 ? '#5A6080' : '#fff'; ctx.fillRect((i * 137) % W, (i * 71) % H, 2, 2); }
+    ctx.fillStyle = col('COLOR_SHOT', '7DF9FF'); ctx.fillRect(400, 160, 4, 16);
+    ctx.fillStyle = col('COLOR_ENEMY_SHOT', 'FF5A5A'); ctx.fillRect(300, 120, 6, 12);
+    ctx.fillStyle = col('COLOR_TITLE', '2FE3FF'); ctx.font = 'bold 30px system-ui'; ctx.fillText('TITULO', 330, 60);
+    ctx.fillStyle = col('COLOR_HUD', 'FFFFFF'); ctx.font = '16px system-ui'; ctx.fillText('PUNTOS 1234', 14, 24);
+    if (arts.ART_SHIP) drawArt(ctx, arts.ART_SHIP, 374, 230, 4);
+    return;
+  }
+  const g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, col('C_SKY_TOP')); g.addColorStop(1, col('C_SKY_BOT'));
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  const blob = (x, y, w, h, cc) => { ctx.fillStyle = cc; ctx.beginPath(); ctx.ellipse(x + w / 2, y + h, w / 2, h, 0, Math.PI, 0); ctx.fill(); };
+  for (let x = -40, i = 0; x < W; x += 230, i++) blob(x, H - 60 - (140 + (i * 53) % 70), 280, 140 + (i * 53) % 70, col('C_FAR_HILL'));
+  ctx.fillStyle = col('C_CLOUD'); [[60, 40], [380, 70], [640, 30]].forEach(([x, y]) => { ctx.beginPath(); ctx.roundRect(x, y, 100, 30, 15); ctx.fill(); ctx.beginPath(); ctx.roundRect(x + 25, y - 14, 55, 36, 18); ctx.fill(); });
+  for (let x = -20, i = 0; x < W; x += 260, i++) blob(x, H - 60 - (90 + (i * 41) % 50), 210, 90 + (i * 41) % 50, col('C_NEAR_HILL'));
+  const gg = ctx.createLinearGradient(0, H - 60, 0, H); gg.addColorStop(0, col('C_DIRT')); gg.addColorStop(1, col('C_DIRT_DARK'));
+  ctx.fillStyle = gg; ctx.fillRect(0, H - 60, W, 60);
+  ctx.fillStyle = col('C_GRASS'); ctx.fillRect(0, H - 62, W, 9); ctx.fillStyle = col('C_GRASS_DARK'); ctx.fillRect(0, H - 53, W, 3);
+  ctx.fillStyle = col('C_PLATFORM'); ctx.fillRect(470, 150, 128, 22); ctx.fillStyle = col('C_PLAT_TOP'); ctx.fillRect(470, 150, 128, 4);
+  for (let i = 0; i < 4; i++) drawTile(ctx, 'B', 230 + i * 32, 130, 32, null, 0, 0, palMap());
+  ctx.fillStyle = col('C_BULLET'); ctx.fillRect(160, H - 92, 12, 5);
+  ctx.fillStyle = col('C_EBULLET'); ctx.beginPath(); ctx.arc(660, H - 120, 5, 0, 7); ctx.fill();
+  if (arts.ART_P_IDLE) drawArt(ctx, arts.ART_P_IDLE, 110, H - 62 - 32, 2);
+  if (arts.ART_WALK1) drawArt(ctx, arts.ART_WALK1, 560, H - 62 - 22, 2);
+  if (arts.ART_TURRET) drawArt(ctx, arts.ART_TURRET, 700, H - 62 - 32, 2);
+}
+
+// ============================== TEXTOS ==============================
+function renderTexts() {
+  const box = $('texts'); box.innerHTML = '<h3>Textos del juego</h3>';
+  for (const [k, v] of Object.entries(texts)) {
+    const d = document.createElement('div'); d.className = 'tfield';
+    d.innerHTML = `<label class="s">${k === 'GAME_TITLE' ? 'Titulo' : k === 'GAME_SUBTITLE' ? 'Subtitulo' : k}</label>
+      <input type="text" value="${v.replace(/"/g, '&quot;')}"><div class="bad"></div>`;
+    const inp = d.querySelector('input'), bad = d.querySelector('.bad');
+    const check = () => { bad.textContent = /[^\x20-\x7E]/.test(inp.value) ? 'La fuente de la pantalla no tiene acentos, ñ ni ¡¿ : usa letras sin tilde.' : ''; };
+    inp.oninput = () => { texts[k] = inp.value; setDirty(true); check(); };
+    check(); box.appendChild(d);
+  }
+  if (!Object.keys(texts).length) box.insertAdjacentHTML('beforeend', '<p class="hint">Este archivo no tiene textos editables.</p>');
+}
+
+// ============================== pestañas ==============================
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('active', x === b));
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.id === b.dataset.tab));
+});
+function renderAll() { renderSprites(); renderLevelTools(); renderLevel(); renderColors(); renderTexts(); }
+</script>
+</body>
+</html>

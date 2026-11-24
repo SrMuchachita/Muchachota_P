@@ -43,6 +43,8 @@ add_executable(sim
     ${UI_DIR}/lang.c
     ${UI_DIR}/styles.c
     ${UI_DIR}/images.c
+    ${UI_DIR}/game_shooter.c    # juego COSMO DEFENSA (prueba en simulador)
+    ${UI_DIR}/game_platform.c   # juego de plataformas + disparos (base de prueba)
     ${UI_DIR}/lock_logos.c
     ${UI_DIR}/font_distance.c   # fuente grande del numero del Panel de Manejo
     ${LVGL_SOURCES}

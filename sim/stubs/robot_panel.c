@@ -39,6 +39,7 @@
 #include "main.h" // HMI_REG_* y el prototipo real de hmi_send_data() (implementada mas abajo)
 #include "vars.h" // get/set_var_brightness, set_var_angle_head/neck_value — para espejar en el HMI real
 #include "screens.h" // objects.* (el slider/labels reales del HMI que se espejan)
+#include "game_platform.h" // game_platform_is_open(): el teclado es del juego mientras esta abierto
 
 #include <windows.h>
 #include <SDL2/SDL.h>
@@ -645,6 +646,9 @@ static bool  s_dbg_btn_l3 = false, s_dbg_btn_r3 = false;
 static void kb_poll_timer_cb(lv_timer_t *t)
 {
     (void)t;
+    // Mientras el juego de plataformas esta abierto, el teclado es del juego
+    // (ver plat_kb_timer_cb en bigview_port.c): no mover el robot con WASD/flechas.
+    if (game_platform_is_open()) return;
     const Uint8 *ks = SDL_GetKeyboardState(NULL);
     bool w = ks[SDL_SCANCODE_W], s = ks[SDL_SCANCODE_S];
     bool a = ks[SDL_SCANCODE_A], d = ks[SDL_SCANCODE_D];

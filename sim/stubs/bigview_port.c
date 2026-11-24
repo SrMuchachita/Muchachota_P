@@ -1207,6 +1207,46 @@ void sim_robot_battery_seed(void)
 // debajo del resto de controles de esa ventana. Llamar una vez desde ahi.
 static void sim_capture_button_create(lv_obj_t *parent); // definida mas abajo
 
+// Juego COSMO DEFENSA (main/ui/game_shooter.c, compartido con la placa).
+// Boton solo simulador para probarlo antes de decidir como se abre en la
+// placa real.
+#include "game_shooter.h"
+#include "game_platform.h"
+#include <SDL2/SDL.h>
+static void game_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    sim_log("Juego: abrir COSMO DEFENSA");
+    game_shooter_open();
+}
+
+// Juego de plataformas: en la placa la entrada sera tactil/joystick; aca se
+// suma el teclado de la PC (varias teclas a la vez, que con el mouse no se
+// puede). Mientras el juego esta abierto, robot_panel.c ignora estas teclas.
+static void plat_kb_timer_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (!game_platform_is_open()) return;
+    const Uint8 *ks = SDL_GetKeyboardState(NULL);
+    uint8_t m = 0;
+    if (ks[SDL_SCANCODE_LEFT]  || ks[SDL_SCANCODE_A]) m |= GP_IN_LEFT;
+    if (ks[SDL_SCANCODE_RIGHT] || ks[SDL_SCANCODE_D]) m |= GP_IN_RIGHT;
+    if (ks[SDL_SCANCODE_UP]    || ks[SDL_SCANCODE_W]) m |= GP_IN_UP;
+    if (ks[SDL_SCANCODE_Z]     || ks[SDL_SCANCODE_SPACE]) m |= GP_IN_JUMP;
+    if (ks[SDL_SCANCODE_X]     || ks[SDL_SCANCODE_J]) m |= GP_IN_FIRE;
+    if (ks[SDL_SCANCODE_C] || ks[SDL_SCANCODE_LSHIFT] || ks[SDL_SCANCODE_RSHIFT]) m |= GP_IN_RUN;
+    game_platform_set_ext_input(m);
+}
+
+static void game_plat_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    static lv_timer_t *kb_t = NULL;
+    if (!kb_t) kb_t = lv_timer_create(plat_kb_timer_cb, 10, NULL);
+    sim_log("Juego: abrir AVENTURA (base de plataformas)");
+    game_platform_open();
+}
+
 void sim_extra_controls_create(lv_obj_t *parent)
 {
     if (s_fake_data_btn) return;
@@ -1215,6 +1255,28 @@ void sim_extra_controls_create(lv_obj_t *parent)
     lv_obj_set_style_text_font(title, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(title, lv_color_hex(SIM_TEXT_DIM), 0);
     lv_label_set_text(title, "SIMULADOR (extras)");
+
+    lv_obj_t *game_btn = lv_button_create(parent);
+    lv_obj_set_size(game_btn, LV_PCT(100), 44);
+    lv_obj_set_style_radius(game_btn, 4, 0);
+    lv_obj_set_style_shadow_opa(game_btn, 0, 0);
+    lv_obj_set_style_bg_color(game_btn, lv_color_hex(0x6A2FD0), 0);
+    lv_obj_add_event_cb(game_btn, game_btn_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *game_lbl = lv_label_create(game_btn);
+    lv_obj_set_style_text_font(game_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_center(game_lbl);
+    lv_label_set_text(game_lbl, LV_SYMBOL_PLAY "  JUEGO: COSMO DEFENSA");
+
+    lv_obj_t *plat_btn = lv_button_create(parent);
+    lv_obj_set_size(plat_btn, LV_PCT(100), 44);
+    lv_obj_set_style_radius(plat_btn, 4, 0);
+    lv_obj_set_style_shadow_opa(plat_btn, 0, 0);
+    lv_obj_set_style_bg_color(plat_btn, lv_color_hex(0x1F8A4C), 0);
+    lv_obj_add_event_cb(plat_btn, game_plat_btn_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *plat_lbl = lv_label_create(plat_btn);
+    lv_obj_set_style_text_font(plat_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_center(plat_lbl);
+    lv_label_set_text(plat_lbl, LV_SYMBOL_PLAY "  JUEGO: AVENTURA (base)");
 
     lv_obj_t *btn = lv_button_create(parent);
     s_fake_data_btn = btn;
